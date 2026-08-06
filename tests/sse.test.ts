@@ -79,7 +79,7 @@ test('every chunk boundary yields the same frames', () => {
 // half by driving utf8() against every split point of a mixed string.
 test('utf8 fallback carries split multibyte sequences across chunks', () => {
   const hadTextDecoder = globalThis.TextDecoder
-  // @ts-expect-error — simulate a Hermes build without the global
+  // Simulate a Hermes build without the global.
   delete (globalThis as { TextDecoder?: unknown }).TextDecoder
   try {
     const text = 'a✓漢🙂z' // 1-, 3-, 3-, 4-byte sequences around ASCII

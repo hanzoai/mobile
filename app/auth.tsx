@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { reason, refusal, v1 } from '@/lib/api'
 import * as store from '@/lib/store'
 
-// Closes the auth browser tab when the redirect lands back on hanzo://auth.
+// Closes the auth browser tab when the redirect lands back on the deep link.
 WebBrowser.maybeCompleteAuthSession()
 
 // Sign-in, both paths real: Hanzo IAM over OIDC PKCE against hanzo.id —
@@ -20,7 +20,10 @@ export default function Auth() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const discovery = useAutoDiscovery(store.issuer)
-  const redirect = makeRedirectUri({ scheme: 'hanzo', path: 'auth' })
+  // hanzo://oauth/mobile — the URI IAM's provisioning DERIVES for a desktop
+  // client (<scheme>://oauth/<app>), so the registration and the app cannot
+  // drift: neither side declares anything the convention does not already say.
+  const redirect = makeRedirectUri({ scheme: 'hanzo', path: 'oauth/mobile' })
   const [request, response, prompt] = useAuthRequest(
     {
       clientId: store.client,

@@ -26,7 +26,7 @@ mirrors `bot/apps/ios`'s manual deploy: local signing, no EAS.
 ## Auth
 
 Identity is native Hanzo IAM (hanzo.id) over OIDC PKCE: public client
-`hanzo-mobile`, redirect `hanzo://auth`, discovery at
+`hanzo-mobile`, redirect `hanzo://oauth/mobile`, discovery at
 `/.well-known/openid-configuration`, token endpoint `/v1/iam/oauth/token`.
 Registering the `hanzo-mobile` client in IAM is the one server-side seed
 still needed; until it lands the sign-in screen says exactly that, and the

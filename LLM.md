@@ -91,7 +91,7 @@ conversation.
 
 `lib/store.ts` keeps ONE slot in expo-secure-store:
 `{ kind: 'iam' | 'key', token, refresh?, exp? }`. An IAM session from
-hanzo.id (OIDC PKCE, public client `hanzo-mobile`, redirect `hanzo://auth`)
+hanzo.id (OIDC PKCE, public client `hanzo-mobile`, redirect `hanzo://oauth/mobile`)
 and a pasted `sk-` key are both bearer values against api.hanzo.ai, so one
 shape holds both and `bearer()` never cares which. Registering the
 `hanzo-mobile` client in IAM is the one server-side seed still needed; the
