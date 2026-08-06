@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 110dp = two launcher cells (70n - 30). Default drop is 4x2 so the four
+     zones breathe; resizable down to 2x2. updatePeriodMillis stays 0 — the
+     app pushes state through WidgetModule, the widget never polls.
+     targetCell* and previewLayout are API 31+ attrs; older levels ignore
+     them and fall back to minWidth/minHeight. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:minWidth="110dp"
+  android:minHeight="110dp"
+  android:minResizeWidth="110dp"
+  android:minResizeHeight="110dp"
+  android:targetCellWidth="4"
+  android:targetCellHeight="2"
+  android:resizeMode="horizontal|vertical"
+  android:widgetCategory="home_screen"
+  android:initialLayout="@layout/widget"
+  android:previewLayout="@layout/widget"
+  android:updatePeriodMillis="0" />

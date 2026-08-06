@@ -39,16 +39,68 @@ export function refusal(status: number, detail?: string): Refusal {
   }
 }
 
-// One frame of a server-sent event stream.
-export type Frame = { event?: string; data: string }
+// The refusal as a throwable, so a catch block can route on kind while an
+// unknown error still reads as the service case.
+export class Refused extends Error {
+  kind: Refusal['kind']
+  status: number
+  constructor(status: number, said: Refusal) {
+    super(said.message)
+    this.name = 'Refused'
+    this.kind = said.kind
+    this.status = status
+  }
+}
 
-// Streams v1(path) and hands each frame to onFrame. The chat agent owns the
-// implementation; the signature is fixed here so parallel work compiles.
-export async function sse(
-  path: string,
-  init: RequestInit,
-  onFrame: (frame: Frame) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  throw new Error('sse is not implemented yet')
+export function refuse(error: unknown): Refusal {
+  if (error instanceof Refused) return { kind: error.kind, message: error.message }
+  return refusal(0, 'Could not reach api.hanzo.ai. Check the connection and try again.')
+}
+
+// What the server itself said, from a strict-JSON body only: msg,
+// error.message, error, message. An HTML error page yields "" — dumping
+// markup into the UI is worse than the honest generic. Key material is
+// redacted at this boundary rather than trusting every upstream, and the
+// sentence is capped so a stack trace cannot become the toast.
+export function reason(body: string): string {
+  let said = ''
+  try {
+    const parsed = JSON.parse(body) as {
+      msg?: unknown
+      message?: unknown
+      error?: { message?: unknown } | string
+    }
+    if (typeof parsed?.msg === 'string') said = parsed.msg
+    else if (typeof parsed?.error === 'object' && typeof parsed.error?.message === 'string') said = parsed.error.message
+    else if (typeof parsed?.error === 'string') said = parsed.error
+    else if (typeof parsed?.message === 'string') said = parsed.message
+  } catch {
+    return ''
+  }
+  return said.replace(/\b([sh]k-[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+/g, '$1…').slice(0, 300)
+}
+
+// The one fetch wrapper: a /v1 path, bearer attached, JSON in and out. A
+// non-2xx throws Refused through the estate mapping, the server's own
+// sentence first when it stated one; an unreachable network throws the
+// honest service case instead of a bare TypeError.
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(v1(path), {
+      ...init,
+      headers: {
+        ...(init.body ? { 'content-type': 'application/json' } : {}),
+        ...(await bearer()),
+        ...(init.headers as Record<string, string> | undefined),
+      },
+    })
+  } catch {
+    throw new Refused(0, refusal(0, 'Could not reach api.hanzo.ai. Check the connection and try again.'))
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Refused(response.status, refusal(response.status, reason(body)))
+  }
+  return (await response.json()) as T
 }

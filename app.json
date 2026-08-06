@@ -36,13 +36,9 @@
           "imageWidth": 76
         }
       ],
-      [
-        "expo-video",
-        {
-          "supportsPictureInPicture": true
-        }
-      ],
-      "./plugins/pip.js"
+      "./plugins/pip.js",
+      "./plugins/widget-android.js",
+      "./plugins/widget-ios.js"
     ],
     "experiments": {
       "typedRoutes": true,

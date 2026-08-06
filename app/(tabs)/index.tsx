@@ -1,10 +1,5 @@
-import { Empty } from '@/components/empty'
+import { Chat } from '@/components/chat/chat'
 
-export default function Chat() {
-  return (
-    <Empty
-      title="Chat"
-      detail="Talk to Hanzo — zen5 by default. Nothing is built here yet; the chat agent replaces this screen."
-    />
-  )
+export default function Screen() {
+  return <Chat />
 }
