@@ -92,7 +92,14 @@ export default function Voice() {
   async function finish() {
     const held = Date.now() - heldAt.current
     pressed.current = false
-    if (!recorder.isRecording) return
+    if (!recorder.isRecording) {
+      // The OS can stop the recorder between begin() and release — a call,
+      // Siri, another app seizing the mic. Nothing was captured, but a run
+      // begin() started must still settle, or the board keeps a phantom
+      // listening row forever and PiP stays armed on a dead card.
+      settle()
+      return
+    }
     try {
       await recorder.stop()
     } catch {

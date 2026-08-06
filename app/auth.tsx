@@ -11,21 +11,19 @@ import * as store from '@/lib/store'
 // Closes the auth browser tab when the redirect lands back on hanzo://auth.
 WebBrowser.maybeCompleteAuthSession()
 
-const issuer = 'https://hanzo.id'
-const client = 'hanzo-mobile'
-
 // Sign-in, both paths real: Hanzo IAM over OIDC PKCE against hanzo.id —
 // never a custom flow — and a pasted API key proven against GET /v1/models
-// before it is kept. Whatever the server refuses with is shown verbatim;
+// before it is kept. The issuer and client id live in lib/store beside the
+// credential they mint. Whatever the server refuses with is shown verbatim;
 // invented sentences are how users end up debugging the wrong thing.
 export default function Auth() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const discovery = useAutoDiscovery(issuer)
+  const discovery = useAutoDiscovery(store.issuer)
   const redirect = makeRedirectUri({ scheme: 'hanzo', path: 'auth' })
   const [request, response, prompt] = useAuthRequest(
     {
-      clientId: client,
+      clientId: store.client,
       redirectUri: redirect,
       scopes: ['openid', 'profile', 'email', 'offline_access'],
     },
@@ -44,7 +42,7 @@ export default function Auth() {
       const error = response.error
       const said = [error?.code, error?.description ?? error?.message].filter(Boolean).join(': ')
       setIamNote(
-        `${said || 'Hanzo ID refused the sign-in.'} — if the ${client} client is not registered yet, paste an API key below instead.`
+        `${said || 'Hanzo ID refused the sign-in.'} — if the ${store.client} client is not registered yet, paste an API key below instead.`
       )
       return
     }
@@ -53,7 +51,7 @@ export default function Auth() {
     setIamNote(null)
     exchangeCodeAsync(
       {
-        clientId: client,
+        clientId: store.client,
         code: response.params.code ?? '',
         redirectUri: redirect,
         extraParams: request?.codeVerifier ? { code_verifier: request.codeVerifier } : {},
@@ -71,7 +69,7 @@ export default function Auth() {
       })
       .catch((error: unknown) => {
         const said = error instanceof Error ? error.message : String(error)
-        setIamNote(`${said} — if the ${client} client is not registered yet, paste an API key below instead.`)
+        setIamNote(`${said} — if the ${store.client} client is not registered yet, paste an API key below instead.`)
       })
       .finally(() => setExchanging(false))
     // The response object is the whole story; request and discovery are

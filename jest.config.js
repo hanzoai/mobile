@@ -12,6 +12,7 @@ module.exports = {
     // The expo runtime is not present under node; each shim is the smallest
     // honest stand-in for the one thing a pure module imports.
     '^expo/fetch$': '<rootDir>/tests/stubs/fetch.ts',
+    '^expo-auth-session$': '<rootDir>/tests/stubs/oauth.ts',
     '^expo-modules-core$': '<rootDir>/tests/stubs/modules.ts',
     '^expo-secure-store$': '<rootDir>/tests/stubs/keychain.ts',
     '^@/(.*)$': '<rootDir>/$1',

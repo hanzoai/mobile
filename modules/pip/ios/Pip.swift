@@ -27,6 +27,8 @@ final class Pip: NSObject {
   private var state = State()   // touched only on queue
   private var began: Date?      // touched only on queue
   private var active = false    // audio session; main thread only
+  private var waiting: NSKeyValueObservation?  // a manual entry parked on isPictureInPicturePossible; main thread only
+  private var expiry: DispatchWorkItem?        // the bound on that wait; main thread only
 
   // The caller supplies the window (and refuses politely when there is
   // none); a throwing init() cannot exist on an NSObject subclass.
@@ -52,10 +54,22 @@ final class Pip: NSObject {
     // Linear playback hides seek chrome the card could never honor.
     made.requiresLinearPlayback = true
     controller = made
+
+    // iOS ends the audio session for calls and Siri without asking. The
+    // `active` flag must follow, or the guard in session() would swallow
+    // every re-arm and one interruption would disarm PiP for the whole run.
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(interrupted(_:)),
+      name: AVAudioSession.interruptionNotification,
+      object: AVAudioSession.sharedInstance()
+    )
   }
 
   deinit {
+    NotificationCenter.default.removeObserver(self)
     timer?.cancel()
+    expiry?.cancel()
   }
 
   // Arms or disarms automatic entry at the moment the user leaves the app.
@@ -74,16 +88,52 @@ final class Pip: NSObject {
   // Manual entry. One fresh frame lands first so AVKit has content to
   // project the moment the window opens. True means the request was
   // submitted, the same promise Android's enterPictureInPictureMode makes;
-  // a refusal comes back through the failure delegate as changed(false).
+  // a refusal comes back through the failure delegate — or the bounded wait
+  // in start() — as changed(false).
   func enter() -> Bool {
     guard !controller.isPictureInPictureActive else { return true }
     session(true)
     run()
     queue.async { [weak self] in
       self?.render()
-      DispatchQueue.main.async { self?.controller.startPictureInPicture() }
+      DispatchQueue.main.async { self?.start() }
     }
     return true
+  }
+
+  // AVKit flips isPictureInPicturePossible asynchronously once the layer is
+  // attached and holds a frame, and startPictureInPicture is a documented
+  // no-op until then — one the failure delegate never reports. On a cold
+  // pipeline the first tap would be silently eaten, so an impossible start
+  // parks on that property and fires when it flips, bounded so a real
+  // refusal still settles as changed(false) instead of a tap that looks
+  // dead. Main thread only, like every other controller touch.
+  private func start() {
+    waiting?.invalidate()
+    waiting = nil
+    expiry?.cancel()
+    expiry = nil
+    if controller.isPictureInPicturePossible {
+      controller.startPictureInPicture()
+      return
+    }
+    waiting = controller.observe(\.isPictureInPicturePossible, options: [.new]) { [weak self] _, change in
+      guard change.newValue == true else { return }
+      DispatchQueue.main.async {
+        // A wait cleared by stop() or replaced by a newer entry stays quiet.
+        guard let self, self.waiting != nil else { return }
+        self.start()
+      }
+    }
+    let bound = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.waiting?.invalidate()
+      self.waiting = nil
+      self.expiry = nil
+      self.emit?("changed", ["inPip": false])
+    }
+    expiry = bound
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: bound)
   }
 
   func update(title: String, phase: String, detail: String?, progress: Double?, thumb: String?, startedAt: Double?) {
@@ -110,8 +160,14 @@ final class Pip: NSObject {
   }
 
   // Ends the window and empties the card but keeps the pipeline warm; the
-  // next update or arm starts a fresh run. Auto stays as JS set it.
+  // next update or arm starts a fresh run. Auto stays as JS set it. A
+  // manual entry still parked in start() is cancelled — stopped means no
+  // window may open later.
   func stop() {
+    waiting?.invalidate()
+    waiting = nil
+    expiry?.cancel()
+    expiry = nil
     if controller.isPictureInPictureActive {
       controller.stopPictureInPicture()
     }
@@ -158,10 +214,13 @@ final class Pip: NSObject {
 
   // PiP eligibility and background runtime both hang off the audio session:
   // .playback keeps the process treated as playing, .mixWithOthers keeps us
-  // from silencing whatever the user is actually listening to.
+  // from silencing whatever the user is actually listening to. The flag
+  // records only what actually took — after a failed arm it stays false so
+  // the next call retries, instead of trusting a session that never
+  // existed; after a failed release it stays true, which is equally the
+  // truth.
   private func session(_ on: Bool) {
     guard on != active else { return }
-    active = on
     let audio = AVAudioSession.sharedInstance()
     do {
       if on {
@@ -170,8 +229,31 @@ final class Pip: NSObject {
       } else {
         try audio.setActive(false, options: [.notifyOthersOnDeactivation])
       }
+      active = on
     } catch {
       NSLog("[pip] audio session: %@", error.localizedDescription)
+    }
+  }
+
+  // A phone call or Siri deactivates the session out from under us. Record
+  // that honestly the moment it begins, and take the session back when the
+  // interruption ends while the pipeline is live — a running timer means
+  // auto is armed or the window is open, exactly the states that depend on
+  // the session. The notification can arrive on any thread; `active` and
+  // `timer` belong to main.
+  @objc private func interrupted(_ note: Notification) {
+    guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let kind = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      switch kind {
+      case .began:
+        self.active = false
+      case .ended:
+        if self.timer != nil { self.session(true) }
+      @unknown default:
+        break
+      }
     }
   }
 

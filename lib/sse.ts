@@ -50,9 +50,12 @@ export function parser(onFrame: (frame: Frame) => void): { feed(chunk: string): 
 
 // UTF-8 decode without assuming the TextDecoder global: Hermes gained it
 // late, and a missing global must not take streaming down on some device.
-function decode(bytes: Uint8Array): string {
-  if (typeof TextDecoder !== 'undefined') {
-    decoder ??= new TextDecoder()
+// The decoder is stateful — {stream: true} holds the tail of a multibyte
+// character split across chunks — so each stream owns its own; a shared one
+// would braid concurrent streams together and leak one stream's pending
+// bytes into the next.
+function decode(bytes: Uint8Array, decoder: TextDecoder | null): string {
+  if (decoder) {
     return decoder.decode(bytes, { stream: true })
   }
   let out = ''
@@ -77,7 +80,6 @@ function decode(bytes: Uint8Array): string {
   }
   return out
 }
-let decoder: TextDecoder | undefined
 
 export type Init = {
   method?: string
@@ -117,14 +119,18 @@ export async function sse(
     throw new Refused(0, refusal(0, 'The stream arrived without a body.'))
   }
   const feed = parser(onFrame)
+  const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null
   try {
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
-      if (value) feed.feed(decode(value))
+      if (value) feed.feed(decode(value, decoder))
     }
-    // A final lone newline may still be buffered; the spec drops an
-    // unterminated frame, and so do we.
+    // The decoder may still hold the tail of a split character; flush it
+    // through the parser. A final lone newline may still be buffered after
+    // that; the spec drops an unterminated frame, and so do we.
+    const tail = decoder?.decode() ?? ''
+    if (tail) feed.feed(tail)
   } catch (error) {
     if (signal?.aborted) return
     throw error
