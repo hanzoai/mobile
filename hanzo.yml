@@ -1,0 +1,28 @@
+# Canonical CI for hanzoai/mobile — the Expo/React Native client.
+#
+# No `images:` and no `deploy:`: this ships through the app stores via EAS, not
+# as a container onto a cluster. What CI owes it is a gate, and the gate is the
+# type checker plus the suite — both of which fail loudly on broken code.
+#
+# NOT RUNNING YET, and the reason is not this file: hanzoai/mobile is the one
+# repo in the org with no presence on git.hanzo.ai, so the forge has nothing to
+# raise a push event against. The pair below is correct and will run the moment
+# the mirror is provisioned; creating it needs `write:organization` on the forge.
+
+test:
+  - name: typecheck
+    # tsc is the build for this repo — there is no bundle step in CI, so a type
+    # error is the earliest honest signal that the app is broken.
+    run: |
+      set -e
+      corepack enable
+      pnpm install --frozen-lockfile
+      pnpm typecheck
+
+  - name: test
+    # Jest. Runs after typecheck so a red here means logic, not types.
+    run: |
+      set -e
+      corepack enable
+      pnpm install --frozen-lockfile
+      pnpm test
