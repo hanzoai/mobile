@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FlatList, KeyboardAvoidingView, Platform } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-import { refuse } from '@/lib/api'
+import { refuse, type Refusal } from '@/lib/api'
 import { defaultModel, models, vision } from '@/lib/models'
 import { token } from '@/lib/store'
 
@@ -41,7 +41,7 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
   const [streaming, setStreaming] = useState(false)
   const [model, setModel] = useState<string | null>(null)
   const [ids, setIds] = useState<string[] | null>(null)
-  const [catalogNote, setCatalogNote] = useState<string | null>(null)
+  const [catalogNote, setCatalogNote] = useState<Refusal | null>(null)
   const [picking, setPicking] = useState(false)
 
   // Re-check the credential on every focus so returning from /auth or from a
@@ -67,7 +67,7 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
       })
       .catch((error) => {
         setIds(null)
-        setCatalogNote(refuse(error).message)
+        setCatalogNote(refuse(error))
       })
   }, [])
 
@@ -97,7 +97,7 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
     if (!used) {
       setMessages((current) => [
         ...current,
-        note(catalogNote ? `The model catalog has not loaded. ${catalogNote}` : 'The model catalog is still loading.'),
+        note(catalogNote ? `The model catalog has not loaded. ${catalogNote.message}` : 'The model catalog is still loading.'),
       ])
       return
     }
@@ -263,7 +263,7 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
                 : model
                   ? `Ask anything — ${model} answers.`
                   : catalogNote
-                    ? catalogNote
+                    ? catalogNote.message
                     : 'Loading the model catalog.'}
             </Text>
           </YStack>

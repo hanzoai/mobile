@@ -1,15 +1,19 @@
 import { Button, ScrollView, Sheet, Spinner, Text, XStack, YStack } from '@hanzo/gui'
 import { Check } from '@hanzogui/lucide-icons-2'
 
+import type { Refusal } from '@/lib/api'
+
 // The model picker: the live catalog in a sheet, nothing invented. The
-// three states are all honest — loading, the exact refusal sentence with a
-// retry only because loading a list is a service concern, or the list.
+// three states are all honest — loading, the exact refusal sentence, or the
+// list. Reload appears ONLY for a service refusal, the one kind whose
+// message honestly says try again; a permission or credential refusal must
+// never bait a retry that can only repeat itself.
 export function Picker(props: {
   open: boolean
   onClose(): void
   model: string | null
   ids: string[] | null
-  note: string | null
+  note: Refusal | null
   onPick(id: string): void
   onReload(): void
 }) {
@@ -45,11 +49,13 @@ export function Picker(props: {
         ) : props.note ? (
           <YStack flex={1} items="center" justify="center" p="$5" gap="$3">
             <Text color="$color" fontSize={14} text="center" lineHeight={20}>
-              {props.note}
+              {props.note.message}
             </Text>
-            <Button size="$3" bg="$color3" color="$color" onPress={props.onReload}>
-              Reload
-            </Button>
+            {props.note.kind === 'service' ? (
+              <Button size="$3" bg="$color3" color="$color" onPress={props.onReload}>
+                Reload
+              </Button>
+            ) : null}
           </YStack>
         ) : props.ids && props.ids.length === 0 ? (
           <YStack flex={1} items="center" justify="center" p="$5">

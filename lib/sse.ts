@@ -48,37 +48,53 @@ export function parser(onFrame: (frame: Frame) => void): { feed(chunk: string): 
   }
 }
 
-// UTF-8 decode without assuming the TextDecoder global: Hermes gained it
-// late, and a missing global must not take streaming down on some device.
-// The decoder is stateful — {stream: true} holds the tail of a multibyte
-// character split across chunks — so each stream owns its own; a shared one
-// would braid concurrent streams together and leak one stream's pending
-// bytes into the next.
-function decode(bytes: Uint8Array, decoder: TextDecoder | null): string {
-  if (decoder) {
-    return decoder.decode(bytes, { stream: true })
+// Per-stream UTF-8 decoder. TextDecoder when the global exists; Hermes gained
+// it late, and a missing global must not take streaming down on some device,
+// so the fall-back hand-decodes — INCLUDING a multibyte character split across
+// chunks, which is the exact case a streaming decoder exists to survive: an
+// incomplete trailing sequence is carried into the next decode, never read
+// past the end of the chunk. Both faces are stateful, so each stream owns its
+// own decoder; a shared one would braid concurrent streams together.
+export function utf8(): { decode(bytes: Uint8Array): string; flush(): string } {
+  if (typeof TextDecoder !== 'undefined') {
+    const d = new TextDecoder()
+    return { decode: (bytes) => d.decode(bytes, { stream: true }), flush: () => d.decode() }
   }
-  let out = ''
-  let i = 0
-  while (i < bytes.length) {
-    const a = bytes[i]!
-    if (a < 0x80) {
-      out += String.fromCharCode(a)
-      i += 1
-    } else if (a < 0xe0) {
-      out += String.fromCharCode(((a & 0x1f) << 6) | (bytes[i + 1]! & 0x3f))
-      i += 2
-    } else if (a < 0xf0) {
-      out += String.fromCharCode(((a & 0x0f) << 12) | ((bytes[i + 1]! & 0x3f) << 6) | (bytes[i + 2]! & 0x3f))
-      i += 3
-    } else {
-      const point =
-        ((a & 0x07) << 18) | ((bytes[i + 1]! & 0x3f) << 12) | ((bytes[i + 2]! & 0x3f) << 6) | (bytes[i + 3]! & 0x3f)
-      out += String.fromCodePoint(point)
-      i += 4
-    }
+  let carry: number[] = []
+  const width = (lead: number) => (lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4)
+  return {
+    decode(bytes) {
+      const buf = carry.length ? Uint8Array.from([...carry, ...bytes]) : bytes
+      carry = []
+      let out = ''
+      let i = 0
+      while (i < buf.length) {
+        const a = buf[i]!
+        const n = width(a)
+        if (i + n > buf.length) {
+          carry = Array.from(buf.slice(i))
+          break
+        }
+        if (n === 1) out += String.fromCharCode(a)
+        else if (n === 2) out += String.fromCharCode(((a & 0x1f) << 6) | (buf[i + 1]! & 0x3f))
+        else if (n === 3)
+          out += String.fromCharCode(((a & 0x0f) << 12) | ((buf[i + 1]! & 0x3f) << 6) | (buf[i + 2]! & 0x3f))
+        else
+          out += String.fromCodePoint(
+            ((a & 0x07) << 18) | ((buf[i + 1]! & 0x3f) << 12) | ((buf[i + 2]! & 0x3f) << 6) | (buf[i + 3]! & 0x3f)
+          )
+        i += n
+      }
+      return out
+    },
+    // A sequence still incomplete at end of stream decodes as U+FFFD — the
+    // same answer TextDecoder's non-fatal mode gives.
+    flush() {
+      const bad = carry.length > 0
+      carry = []
+      return bad ? '�' : ''
+    },
   }
-  return out
 }
 
 export type Init = {
@@ -119,17 +135,17 @@ export async function sse(
     throw new Refused(0, refusal(0, 'The stream arrived without a body.'))
   }
   const feed = parser(onFrame)
-  const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null
+  const decoder = utf8()
   try {
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
-      if (value) feed.feed(decode(value, decoder))
+      if (value) feed.feed(decoder.decode(value))
     }
     // The decoder may still hold the tail of a split character; flush it
     // through the parser. A final lone newline may still be buffered after
     // that; the spec drops an unterminated frame, and so do we.
-    const tail = decoder?.decode() ?? ''
+    const tail = decoder.flush()
     if (tail) feed.feed(tail)
   } catch (error) {
     if (signal?.aborted) return

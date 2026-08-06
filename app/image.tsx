@@ -1,5 +1,6 @@
 import { Button, ScrollView, Spinner, Text, TextArea, XStack, YStack } from '@hanzo/gui'
 import { ArrowLeft, Share2, Sparkles } from '@hanzogui/lucide-icons-2'
+import { File, Paths } from 'expo-file-system'
 import { Image } from 'expo-image'
 import { router } from 'expo-router'
 import { useState } from 'react'
@@ -68,7 +69,22 @@ export default function Generate() {
         return
       }
       setShot(uri)
-      runs.end(run.id, { phase: 'done', thumb: uri })
+      // The registry ring keeps 20 runs for the tasks board and the widget; a
+      // base64 data URI would pin the full multi-megabyte PNG in the JS heap
+      // per slot. Park the bytes in a cache file (voice already does exactly
+      // this for speech) and hand the run a file:// URI instead.
+      let thumb = uri
+      if (uri.startsWith('data:')) {
+        try {
+          const file = new File(Paths.cache, `image-${run.id}.png`)
+          file.write(Uint8Array.from(atob(uri.slice(uri.indexOf(',') + 1)), (c) => c.charCodeAt(0)))
+          thumb = file.uri
+        } catch {
+          // The board just loses its thumbnail; the image on screen stands.
+          thumb = ''
+        }
+      }
+      runs.end(run.id, { phase: 'done', ...(thumb ? { thumb } : {}) })
     } catch {
       const said = refusal(0, 'No connection. Check the network and try again.')
       setFault(said)

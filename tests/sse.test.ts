@@ -1,4 +1,4 @@
-import { parser, type Frame } from '@/lib/sse'
+import { parser, utf8, type Frame } from '@/lib/sse'
 
 // The grammar under test is the pure incremental parser; IO stays out. The
 // law that matters for streaming: any split of the same bytes must yield the
@@ -71,4 +71,30 @@ test('every chunk boundary yields the same frames', () => {
   const drip = collect()
   for (const ch of stream) drip.feed(ch)
   expect(drip.frames).toEqual(whole.frames)
+})
+
+// The fall-back decoder (no TextDecoder global) must carry a multibyte
+// character split across chunks — the case streaming exists to survive. The
+// TextDecoder face is exercised by the environment; this pins the hand-rolled
+// half by driving utf8() against every split point of a mixed string.
+test('utf8 fallback carries split multibyte sequences across chunks', () => {
+  const hadTextDecoder = globalThis.TextDecoder
+  // @ts-expect-error — simulate a Hermes build without the global
+  delete (globalThis as { TextDecoder?: unknown }).TextDecoder
+  try {
+    const text = 'a✓漢🙂z' // 1-, 3-, 3-, 4-byte sequences around ASCII
+    const bytes = Buffer.from(text, 'utf8')
+    for (let at = 1; at < bytes.length; at++) {
+      const d = utf8()
+      const out = d.decode(new Uint8Array(bytes.subarray(0, at))) + d.decode(new Uint8Array(bytes.subarray(at))) + d.flush()
+      expect(out).toBe(text)
+    }
+    // A sequence still open at end of stream flushes as U+FFFD, TextDecoder's
+    // own non-fatal answer.
+    const cut = utf8()
+    const partial = cut.decode(new Uint8Array(bytes.subarray(0, 2))) + cut.flush()
+    expect(partial).toBe('a�')
+  } finally {
+    ;(globalThis as { TextDecoder?: unknown }).TextDecoder = hadTextDecoder
+  }
 })

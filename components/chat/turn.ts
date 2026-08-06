@@ -10,14 +10,25 @@ type Part = { type: 'text'; text: string } | { type: 'image_url'; image_url: { u
 type Wire = { role: 'user' | 'assistant'; content: string | Part[] }
 
 function wire(messages: Message[]): Wire[] {
+  // Only the LAST user message carries its images as inline parts. An image is
+  // a data: URI of the full photo; resending every historical one would grow
+  // each request by megabytes for the rest of the transcript (history keeps
+  // 200 messages) until the gateway's body limit refused the turn. Older
+  // images collapse to a placeholder the model can still anchor on.
+  const trailing = [...messages].reverse().find((m) => m.role === 'user')
   const out: Wire[] = []
   for (const message of messages) {
     // Notes are surface state (refusals, clears) — the model never sees them.
     if (message.role === 'note') continue
     if (message.role === 'user' && message.images?.length) {
-      const content: Part[] = message.images.map((url) => ({ type: 'image_url', image_url: { url } }))
-      if (message.text) content.push({ type: 'text', text: message.text })
-      out.push({ role: 'user', content })
+      if (message === trailing) {
+        const content: Part[] = message.images.map((url) => ({ type: 'image_url', image_url: { url } }))
+        if (message.text) content.push({ type: 'text', text: message.text })
+        out.push({ role: 'user', content })
+      } else {
+        const note = message.images.length === 1 ? '[image attached earlier]' : `[${message.images.length} images attached earlier]`
+        out.push({ role: 'user', content: message.text ? `${note}\n${message.text}` : note })
+      }
     } else {
       out.push({ role: message.role, content: message.text })
     }
@@ -90,7 +101,17 @@ export async function turn(options: {
       },
       options.signal
     )
-  } finally {
-    runs.end(run.id)
+    // The history ring keeps the phase a run ended in; a bare end would file
+    // success, abort and failure all as 'streaming', and a failed turn would
+    // read as a quietly finished one on the tasks board. An abort resolves the
+    // stream quietly (stopping is a finish, not a failure), so it lands here.
+    runs.end(run.id, { phase: options.signal?.aborted ? 'stopped' : 'done' })
+  } catch (error) {
+    const stopped = options.signal?.aborted === true
+    runs.end(run.id, {
+      phase: stopped ? 'stopped' : 'error',
+      detail: stopped ? undefined : error instanceof Error ? error.message : String(error),
+    })
+    throw error
   }
 }
