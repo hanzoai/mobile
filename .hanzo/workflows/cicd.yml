@@ -11,5 +11,9 @@ on:
   workflow_dispatch:
 jobs:
   cicd:
-    uses: hanzoai/ci/.hanzo/workflows/build.yml@v1
+    # Pinned ahead of the `v1` alias: publishing a release asset off github.com
+    # needs a credential the listening forge issued, which v1.0.67 is the first
+    # tag to pick. This repo is the first to publish one, so it proves the tag
+    # before the alias moves and the whole fleet follows.
+    uses: hanzoai/ci/.hanzo/workflows/build.yml@v1.0.67
     secrets: inherit
