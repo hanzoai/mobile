@@ -1,13 +1,8 @@
 # Canonical CI for hanzoai/mobile — the Expo/React Native client.
 #
-# No `images:` and no `deploy:`: this ships through the app stores via EAS, not
-# as a container onto a cluster. What CI owes it is a gate, and the gate is the
-# type checker plus the suite — both of which fail loudly on broken code.
-#
-# NOT RUNNING YET, and the reason is not this file: hanzoai/mobile is the one
-# repo in the org with no presence on git.hanzo.ai, so the forge has nothing to
-# raise a push event against. The pair below is correct and will run the moment
-# the mirror is provisioned; creating it needs `write:organization` on the forge.
+# No `images:` and no `deploy:`: a phone installs this, no cluster runs it. So
+# the artifact is an APK, published through `binaries:` — the same lane that
+# ships an executable a host installs, which is what an app is.
 
 test:
   - name: typecheck
@@ -26,3 +21,28 @@ test:
       corepack enable
       pnpm install --frozen-lockfile
       pnpm test
+
+binaries:
+  - name: hanzo-android
+    # `android/` is generated, not tracked, so the icons and the manifest in the
+    # APK are whatever app.json says at this commit — there is no second copy to
+    # drift. Release is self-signed by the React Native template, which is enough
+    # to sideload; a store upload needs its own key and does not come from here.
+    run: |
+      set -e
+      corepack enable
+      pnpm install --frozen-lockfile
+      # Gradle resolves dependencies but never the SDK itself, so a runner
+      # without one gets it here rather than failing three minutes in.
+      if [ -z "${ANDROID_HOME:-}" ]; then
+        export ANDROID_HOME="$RUNNER_TEMP/android"
+        mkdir -p "$ANDROID_HOME/cmdline-tools"
+        curl -fsSL -o "$RUNNER_TEMP/tools.zip" \
+          https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+        unzip -q "$RUNNER_TEMP/tools.zip" -d "$ANDROID_HOME/cmdline-tools"
+        mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+      fi
+      npx expo prebuild --platform android --no-install
+      ./android/gradlew -p android --no-daemon assembleRelease
+    out: android/app/build/outputs/apk/release/*.apk
