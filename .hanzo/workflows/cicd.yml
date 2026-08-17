@@ -11,11 +11,5 @@ on:
   workflow_dispatch:
 jobs:
   cicd:
-    # Pinned ahead of the `v1` alias. Publishing a release asset off github.com
-    # takes three things github.com never made anyone state: a credential the
-    # listening forge issued, an upload address that forge answers on, and a body
-    # it reads as JSON, and a download address a reader outside the cluster can reach. v1.0.71 is the first tag with all of it. This repo is the
-    # first to publish an asset anywhere, so it proves the tag before the alias
-    # moves and every other repo follows it.
-    uses: hanzoai/ci/.hanzo/workflows/build.yml@v1.0.71
+    uses: hanzoai/ci/.hanzo/workflows/build.yml@v1
     secrets: inherit
