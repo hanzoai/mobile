@@ -29,20 +29,50 @@ binaries:
     # drift. Release is self-signed by the React Native template, which is enough
     # to sideload; a store upload needs its own key and does not come from here.
     run: |
-      set -e
+      set -eu
       corepack enable
       pnpm install --frozen-lockfile
-      # Gradle resolves dependencies but never the SDK itself, so a runner
-      # without one gets it here rather than failing three minutes in.
-      if [ -z "${ANDROID_HOME:-}" ]; then
-        export ANDROID_HOME="$RUNNER_TEMP/android"
-        mkdir -p "$ANDROID_HOME/cmdline-tools"
-        curl -fsSL -o "$RUNNER_TEMP/tools.zip" \
-          https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-        unzip -q "$RUNNER_TEMP/tools.zip" -d "$ANDROID_HOME/cmdline-tools"
-        mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+
+      # The runner is bare — it carries node and nothing else, and the
+      # reusable's own JDK lane only fires for a `client:` repo. So both
+      # halves of an Android toolchain are provisioned here, each behind a
+      # test for the thing gradle actually needs rather than for a variable
+      # that only suggests it. RUNNER_TEMP is not guaranteed on this runner;
+      # unset, it used to expand to an empty prefix and put the SDK at /.
+      TMP="${RUNNER_TEMP:-/tmp}"
+
+      # AGP 8 compiles against 17. Temurin publishes on the same host the
+      # runner already fetches jq and yq from, so this needs no new egress.
+      if ! command -v javac >/dev/null 2>&1; then
+        curl -fsSL -o "$TMP/jdk.tgz" \
+          https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.13%2B11/OpenJDK17U-jdk_x64_linux_hotspot_17.0.13_11.tar.gz
+        mkdir -p "$TMP/jdk"
+        tar -xzf "$TMP/jdk.tgz" -C "$TMP/jdk" --strip-components=1
+        JAVA_HOME="$TMP/jdk"; export JAVA_HOME
+        PATH="$JAVA_HOME/bin:$PATH"; export PATH
       fi
+
+      # A partial SDK sets ANDROID_HOME and still has no platform to build
+      # against, so the test is for the platforms directory itself. Gradle
+      # downloads the platform and build-tools it wants once the licences
+      # are accepted, which is why only cmdline-tools is fetched here.
+      ANDROID_HOME="${ANDROID_HOME:-$TMP/android-sdk}"; export ANDROID_HOME
+      if [ ! -d "$ANDROID_HOME/platforms" ]; then
+        mkdir -p "$ANDROID_HOME/cmdline-tools"
+        curl -fsSL -o "$TMP/tools.zip" \
+          https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+        unzip -q -o "$TMP/tools.zip" -d "$ANDROID_HOME/cmdline-tools"
+        rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+        mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+      fi
+
+      echo "toolchain: node $(node -v), $(java -version 2>&1 | head -1), sdk $ANDROID_HOME"
+
       npx expo prebuild --platform android --no-install
-      ./android/gradlew -p android --no-daemon assembleRelease
+      # Bounded heap and one worker: these pods declare no memory request, so
+      # an unbounded gradle is the difference between a red step and a pod
+      # the kernel kills with no log to read.
+      ./android/gradlew -p android --no-daemon --max-workers=2 \
+        -Dorg.gradle.jvmargs=-Xmx3g assembleRelease
     out: android/app/build/outputs/apk/release/*.apk
