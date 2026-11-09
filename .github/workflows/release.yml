@@ -1,0 +1,253 @@
+# Release the Android APK.
+#
+# A `v*` tag builds the APK and attaches it to that tag's GitHub release as
+# hanzo-android-v<version>.apk, the name hanzo-inc/app's sync-releases resolves
+# (/^hanzo-android-v[\d.]+\.apk$/). This is the ONLY publisher: hanzo.yml has no
+# `binaries:` lane, because hanzoai/ci's would create the same release on the
+# same tag and race this one.
+#
+# A pull request that touches this file is the DRY RUN: the same build, then the
+# upload goes to a DRAFT release named dry-run-pr<N> (invisible to readers and to
+# releases/latest), is checked, and is deleted whether or not anything failed.
+# workflow_dispatch needs the workflow on the default branch, so a PR is the only
+# way to run a change to this file before it merges.
+name: Release APK
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['.github/workflows/release.yml']
+
+permissions:
+  contents: write
+
+# Serialised, never cancelled: a cancelled run's cleanup would delete the draft a
+# newer run of the same PR had already reused.
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  apk:
+    # A fork's token is read-only and the dry run writes a draft release.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # `heavy-` is a class the platform scheduler reads (6 CPU, 24Gi, 80Gi disk);
+    # the `-amd64` suffix is what the runner fleet serves.
+    runs-on: [heavy-linux-amd64]
+    timeout-minutes: 60
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+      # The release this run writes to: the tag, or on a pull request the draft.
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || format('dry-run-pr{0}', github.event.pull_request.number) }}
+      DRAFT: ${{ github.event_name == 'pull_request' }}
+    steps:
+      # First and alone, so the cleanup at the end has it however far the job got.
+      - name: Release helpers
+        run: |
+          cat > "$RUNNER_TEMP/release-api.sh" <<'EOF'
+          API="${GITHUB_API_URL:-https://api.github.com}"
+          R="$API/repos/$GITHUB_REPOSITORY"
+          # Prints the body on 2xx. On a refusal prints what the server said to
+          # stderr and fails: curl -f would throw the explanation away.
+          api() {
+            local out status
+            out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' "$@")
+            status=${out##*$'\n'}
+            case "$status" in 2*) printf '%s' "${out%$'\n'*}"; return 0 ;; esac
+            printf 'refused: %s %s\n%s\n' "$status" "$*" "$(printf '%s' "${out%$'\n'*}" | head -c 400)" >&2
+            return 1
+          }
+          # The release with this tag, drafts included (releases/tags/<tag> does
+          # not return a draft). Prints its JSON, or nothing.
+          find_release() {
+            local page=1 body hit
+            while :; do
+              body=$(api "$R/releases?per_page=100&page=$page") || return 1
+              [ "$(jq length <<<"$body")" -gt 0 ] || return 0
+              hit=$(jq -c --arg t "$1" '[.[] | select(.tag_name == $t)][0] // empty' <<<"$body")
+              if [ -n "$hit" ]; then printf '%s' "$hit"; return 0; fi
+              page=$((page + 1))
+            done
+          }
+          EOF
+
+      - uses: actions/checkout@v4
+
+      # The tag is the version of record: the APK reports app.json's version, so
+      # a tag that disagrees would ship a build whose name lies about it. A
+      # pull request has no tag; it builds whatever app.json says.
+      - name: Version of record
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          set -euo pipefail
+          app=$(jq -r '.expo.version // empty' app.json)
+          [ -n "$app" ] || { echo "::error::app.json has no expo.version"; exit 1; }
+          if [ -n "$TAG" ] && [ "$TAG" != "v$app" ]; then
+            echo "::error::tag $TAG disagrees with app.json expo.version $app. The tag is the version of record: set expo.version to ${TAG#v} and retag."
+            exit 1
+          fi
+          # Dots and digits only, or the asset name falls outside what the
+          # download page resolves and the release would ship invisible.
+          printf '%s' "$app" | grep -Eq '^[0-9]+(\.[0-9]+)*$' \
+            || { echo "::error::version $app is not digits and dots, so hanzo-android-v$app.apk would not match the download page"; exit 1; }
+          echo "VERSION=$app" >> "$GITHUB_ENV"
+          echo "version of record: $app (${TAG:-no tag, dry run})"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          # corepack's default install directory is the node prefix, which this
+          # user cannot write.
+          mkdir -p "$RUNNER_TEMP/bin"
+          corepack enable --install-directory "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          PATH="$RUNNER_TEMP/bin:$PATH"
+          pnpm install --frozen-lockfile
+
+      # The runner has a JDK and no Android SDK, no sudo and no apt, so the
+      # SDK's command-line tools come into RUNNER_TEMP. Gradle fetches the
+      # platform, build-tools and NDK itself once the licences are accepted.
+      - name: Android toolchain
+        run: |
+          set -euo pipefail
+          command -v javac >/dev/null || { echo "::error::the runner image has no JDK"; exit 1; }
+          ANDROID_HOME="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL -o "$RUNNER_TEMP/tools.zip" \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          echo "2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258  $RUNNER_TEMP/tools.zip" | sha256sum -c -
+          unzip -q -o "$RUNNER_TEMP/tools.zip" -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          # `yes` dies of SIGPIPE when sdkmanager finishes, which pipefail
+          # reports; what gradle needs is the licence file, so that is the test.
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          [ -s "$ANDROID_HOME/licenses/android-sdk-license" ] \
+            || { echo "::error::android-sdk-license was not accepted"; exit 1; }
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "toolchain: node $(node -v), $(java -version 2>&1 | head -1), sdk $ANDROID_HOME"
+
+      # `android/` is generated and untracked, so the manifest and icons in the
+      # APK are whatever app.json says at this commit.
+      - name: Prebuild
+        run: |
+          set -euo pipefail
+          PATH="$RUNNER_TEMP/bin:$PATH"
+          npx expo prebuild --platform android --no-install
+
+      # Bounded heap and workers: the pod's cgroup limit is not what gradle and
+      # the compilers read, they read the node's cores.
+      - name: Gradle assembleRelease
+        run: |
+          set -euo pipefail
+          ./android/gradlew -p android --no-daemon --max-workers=2 \
+            -Dorg.gradle.jvmargs=-Xmx3g assembleRelease
+
+      - name: Check the APK
+        run: |
+          set -euo pipefail
+          apks=(android/app/build/outputs/apk/release/*.apk)
+          [ "${#apks[@]}" -eq 1 ] && [ -f "${apks[0]}" ] \
+            || { echo "::error::expected one release APK, found: ${apks[*]}"; exit 1; }
+          mkdir -p dist
+          APK="dist/hanzo-android-v$VERSION.apk"
+          cp "${apks[0]}" "$APK"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          unzip -l "$APK" | sed -n '1,4p;$p'
+          python3 -I - "$APK" <<'EOF'
+          import sys, zipfile
+          z = zipfile.ZipFile(sys.argv[1])
+          bad = z.testzip()
+          if bad:
+              sys.exit(f"corrupt entry {bad}")
+          if "AndroidManifest.xml" not in z.namelist():
+              sys.exit("no AndroidManifest.xml")
+          # The manifest is binary XML; its string pool holds the package as
+          # UTF-16 or, in a newer aapt2, UTF-8.
+          m = z.read("AndroidManifest.xml")
+          pkg = "ai.hanzo.mobile"
+          if pkg.encode("utf-16-le") not in m and pkg.encode() not in m:
+              sys.exit(f"manifest does not name {pkg}")
+          print(f"zip ok, {len(z.namelist())} entries, manifest names {pkg}")
+          EOF
+          # aapt2 reads the manifest properly when build-tools brought one.
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | tail -1 || true)
+          if [ -n "$aapt2" ]; then
+            badging=$("$aapt2" dump badging "$APK" | sed -n 1p)
+            echo "$badging"
+            case "$badging" in
+              "package: name='ai.hanzo.mobile'"*"versionName='$VERSION'"*) ;;
+              *) echo "::error::APK is not ai.hanzo.mobile $VERSION"; exit 1 ;;
+            esac
+          else
+            echo "::notice::no aapt2 under $ANDROID_HOME/build-tools; manifest checked by string pool only"
+          fi
+          # The template self-signs a release build; unsigned would not install.
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1 || true)
+          if [ -n "$apksigner" ]; then "$apksigner" verify --print-certs "$APK" | sed -n 1,2p; fi
+
+      # Converges on a re-run: the release is found before it is made, and a
+      # same-named asset is dropped before the new one goes up.
+      - name: Publish to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/release-api.sh"
+          name=$(basename "$APK")
+          rel=$(find_release "$RELEASE_TAG")
+          if [ -z "$rel" ]; then
+            rel=$(api -X POST -H 'Content-Type: application/json' "$R/releases" -d "$(jq -nc \
+              --arg t "$RELEASE_TAG" --arg c "$TARGET" --argjson d "$DRAFT" \
+              '{tag_name: $t, target_commitish: $c, name: $t, draft: $d, generate_release_notes: ($d | not)}')") \
+              || rel=$(find_release "$RELEASE_TAG")
+          fi
+          [ -n "$rel" ] || { echo "::error::could not find or create release $RELEASE_TAG"; exit 1; }
+          id=$(jq -r .id <<<"$rel")
+          echo "release $RELEASE_TAG id=$id draft=$(jq -r .draft <<<"$rel")"
+          for old in $(api "$R/releases/$id/assets?per_page=100" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id'); do
+            api -X DELETE "$R/releases/assets/$old" >/dev/null
+          done
+          up=$(jq -r '.upload_url | sub("\\{.*$"; "")' <<<"$rel")
+          api -X POST -H 'Content-Type: application/vnd.android.package-archive' \
+            --data-binary @"$APK" "$up?name=$name" >/dev/null
+          # What a reader of the release now sees.
+          assets=$(api "$R/releases/$id/assets?per_page=100")
+          jq -r '.[] | "asset \(.name)  \(.size) bytes  \(.state)"' <<<"$assets"
+          got=$(jq -r --arg n "$name" '.[] | select(.name == $n) | "\(.size) \(.state)"' <<<"$assets")
+          [ "$got" = "$(stat -c %s "$APK") uploaded" ] \
+            || { echo "::error::$name is not on release $RELEASE_TAG intact (saw: ${got:-absent})"; exit 1; }
+          jq -r '.[].name' <<<"$assets" | grep -Eq '^hanzo-android-v[0-9.]+\.apk$' \
+            || { echo "::error::no asset on the release matches the download page pattern"; exit 1; }
+          {
+            echo "### $name on \`$RELEASE_TAG\`"
+            echo "sha256 \`$(sha256sum "$APK" | cut -d' ' -f1)\`, $(stat -c %s "$APK") bytes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete the dry-run draft
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/release-api.sh"
+          rel=$(find_release "$RELEASE_TAG")
+          if [ -n "$rel" ]; then
+            [ "$(jq -r .draft <<<"$rel")" = true ] \
+              || { echo "::error::release $RELEASE_TAG is not a draft; refusing to delete it"; exit 1; }
+            api -X DELETE "$R/releases/$(jq -r .id <<<"$rel")" >/dev/null
+          fi
+          [ -z "$(find_release "$RELEASE_TAG")" ] || { echo "::error::draft $RELEASE_TAG is still there"; exit 1; }
+          if api "$R/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::the dry run left a git tag $RELEASE_TAG"; exit 1
+          fi
+          echo "draft $RELEASE_TAG deleted, no tag left behind"
