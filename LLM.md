@@ -97,3 +97,35 @@ shape holds both and `bearer()` never cares which. Registering the
 `hanzo-mobile` client in IAM is the one server-side seed still needed; the
 sign-in screen says so and the key path works today. Secrets never touch
 AsyncStorage or a file.
+
+### The APK is released by one workflow, on a tag
+
+`.github/workflows/release.yml` builds the Android APK on a `v*` tag and
+attaches it to that tag's GitHub release as `hanzo-android-v<version>.apk`.
+hanzo-inc/app's `sync-releases` resolves `/^hanzo-android-v[\d.]+\.apk$/` for
+its download page, so the name is a contract. It is the only publisher:
+`hanzo.yml` has no `binaries:` lane because hanzoai/ci's would create the same
+release on the same tag and race it.
+
+- The tag is the version of record. The job fails before building unless the
+  tag is `v` + `app.json` `expo.version` (the APK reports that field) and that
+  is digits and dots. Bump `expo.version` in the commit you tag.
+- The APK is signed by the React Native template's debug key (`CN=Android
+  Debug`): enough to sideload, not a store upload. No keystore or secret lives
+  here; a store key would belong in Hanzo KMS.
+- It runs on `heavy-linux-amd64` (6 CPU, 24Gi). The runner has a JDK and no
+  Android SDK, no sudo and no apt, so the checksum-pinned command-line tools go
+  into `RUNNER_TEMP` and gradle fetches the platform, build-tools and NDK. The
+  release is made with curl and the job's `GITHUB_TOKEN`; there is no `gh`.
+- A re-run converges: the release is found by tag, drafts included, before it
+  is created, and a same-named asset is replaced.
+- A pull request that touches the workflow is the dry run: the same build
+  uploads to a draft release `dry-run-pr<N>`, checks the asset and deletes the
+  draft in an `if: always()` step. The paths filter reads the PR's whole diff,
+  so every push to that PR rebuilds. A tag must contain the workflow to be
+  built, so v0.1.1 to v0.1.5 never will be.
+- A cold build is about 39 minutes with a 46 s queue: ~8 gradle, SDK and NDK
+  download and configuration, ~22 native C++ for four ABIs (the cores are the
+  limit), ~9 lint and the JS bundle, under a minute to package and upload. The
+  levers are `-PreactNativeArchitectures=arm64-v8a` (an arm64-only APK) and
+  skipping `lintVitalRelease`; neither is applied.
