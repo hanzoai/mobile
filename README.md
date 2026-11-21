@@ -1,5 +1,7 @@
 # Hanzo
 
+[![Open in Hanzo](https://hanzo.app/badges/open-in-hanzo.svg)](https://hanzo.app/dev/open?repo=github.com/hanzoai/mobile&ref=main&action=open) [![Edit with Hanzo](https://hanzo.app/badges/edit-with-hanzo.svg)](https://hanzo.app/dev/open?repo=github.com/hanzoai/mobile&ref=main&action=edit) [![Deploy with Hanzo](https://hanzo.app/badges/deploy-with-hanzo.svg)](https://hanzo.app/dev/open?repo=github.com/hanzoai/mobile&ref=main&action=deploy)
+
 The native Hanzo AI app for iOS and Android: chat, tasks, voice, image
 generation. The AI follows you out of the app — while work runs, leaving the
 app drops it into picture-in-picture on both platforms, and a home-screen
