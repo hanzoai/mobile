@@ -88,3 +88,26 @@ test('two runs born in the same millisecond still order newest first', () => {
   spy.mockRestore()
   expect(runs.live().map((run) => run.id)).toEqual([b.id, a.id])
 })
+
+test('hydrate restores persisted live and finished runs across app restarts', async () => {
+  const disk = new Map<string, string>()
+  const adapter = {
+    getItem: async (k: string) => disk.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      disk.set(k, v)
+    },
+  }
+
+  const beforeRestart = fresh()
+  beforeRestart.configureStorage(adapter)
+  const doneRun = beforeRestart.start({ kind: 'research', title: 'swe-bench-verified', phase: 'running' })
+  beforeRestart.end(doneRun.id, { phase: 'done', detail: 'sha256:abcd' })
+  const liveRun = beforeRestart.start({ kind: 'research', title: 'desktop-hanzod-exp', phase: 'executing' })
+
+  const afterRestart = fresh()
+  afterRestart.configureStorage(adapter)
+  expect(afterRestart.live()).toEqual([])
+  await afterRestart.hydrate()
+  expect(afterRestart.live().map((r) => r.id)).toEqual([liveRun.id])
+  expect(afterRestart.history()[0]?.detail).toBe('sha256:abcd')
+})

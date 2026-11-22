@@ -31,6 +31,7 @@ export default function Tasks() {
   const [refreshing, setRefreshing] = useState(false)
 
   const load = useCallback(async () => {
+    await runs.hydrate()
     setCloud(await sessions.load())
   }, [])
 

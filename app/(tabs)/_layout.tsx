@@ -1,4 +1,4 @@
-import { ListChecks, MessageCircle, Mic, Settings } from '@hanzogui/lucide-icons-2'
+import { Atom, ListChecks, MessageCircle, Mic, Settings } from '@hanzogui/lucide-icons-2'
 import { Tabs } from 'expo-router'
 
 import { dim, fg, ground, hairline } from '@/lib/theme'
@@ -32,6 +32,15 @@ export default function Layout() {
           title: 'Tasks',
           tabBarIcon: ({ focused, size }) => (
             <ListChecks color={focused ? '$color' : '$color11'} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="research"
+        options={{
+          title: 'Research',
+          tabBarIcon: ({ focused, size }) => (
+            <Atom color={focused ? '$color' : '$color11'} size={size} />
           ),
         }}
       />

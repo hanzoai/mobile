@@ -1,5 +1,5 @@
 import { Card, Text, XStack, YStack } from '@hanzo/gui'
-import { Image as Picture, ListChecks, MessageCircle, Mic } from '@hanzogui/lucide-icons-2'
+import { Atom, Image as Picture, ListChecks, MessageCircle, Mic } from '@hanzogui/lucide-icons-2'
 import { Image } from 'expo-image'
 import { useEffect, useState } from 'react'
 
@@ -10,6 +10,7 @@ const icons: Record<runs.Kind, typeof Mic> = {
   image: Picture,
   voice: Mic,
   task: ListChecks,
+  research: Atom,
 }
 
 // m:ss under an hour, h:mm:ss over it.

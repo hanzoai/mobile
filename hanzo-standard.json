@@ -1,0 +1,14 @@
+{
+  "spec_version": "1.0.0",
+  "component": "mobile/hanzo-mobile",
+  "version": "0.1.1",
+  "implemented_hips": [
+    { "hip": "1334", "version": "1.0.0", "status": "conformant" },
+    { "hip": "1350", "version": "1.0.0", "status": "conformant" },
+    { "hip": "1400", "version": "1.0.0", "status": "conformant" },
+    { "hip": "1401", "version": "1.0.0", "status": "conformant" },
+    { "hip": "1402", "version": "1.0.0", "status": "conformant" },
+    { "hip": "1403", "version": "1.0.0", "status": "conformant" }
+  ],
+  "capabilities": ["chat", "tasks", "research", "voice"]
+}
