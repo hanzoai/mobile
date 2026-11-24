@@ -129,6 +129,8 @@ export function end(id: string, patch?: Patch): void {
   emit()
 }
 
+export const finish = end
+
 // Every run still going, newest first.
 export function live(): Run[] {
   return current
