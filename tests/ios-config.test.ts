@@ -46,6 +46,10 @@ const targetConfigFn = require('../targets/widget/expo-target.config.js') as (
   entitlements: { 'com.apple.security.application-groups': string[] }
 }
 
+const xcodeCompatPlugin = require('../plugins/xcode-compat.js') as {
+  patchDateSwiftSource: (source: string) => string
+}
+
 const ENV_KEYS = [
   'HANZO_IOS_BUNDLE_ID',
   'HANZO_IOS_PERSONAL_TEAM_BUNDLE_ID',
@@ -163,3 +167,13 @@ test(
     ])
   })
 )
+
+test('plugins/xcode-compat.js disambiguates Swift.abs(milliseconds) idempotently for Xcode 26.3 C++ interop', () => {
+  const unpatched =
+    '  guard milliseconds.isFinite, abs(milliseconds) <= maxJavaScriptDateMilliseconds else {\n'
+  const patched = xcodeCompatPlugin.patchDateSwiftSource(unpatched)
+  expect(patched).toBe(
+    '  guard milliseconds.isFinite, Swift.abs(milliseconds) <= maxJavaScriptDateMilliseconds else {\n'
+  )
+  expect(xcodeCompatPlugin.patchDateSwiftSource(patched)).toBe(patched)
+})

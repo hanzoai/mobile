@@ -36,6 +36,7 @@
         }
       ],
       "./plugins/pip.js",
+      "./plugins/xcode-compat.js",
       "./plugins/widget-android.js",
       "./plugins/widget-ios.js"
     ],
