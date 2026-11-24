@@ -1,17 +1,19 @@
-# Release the Android APK.
+# Release the Android APK and unsigned iOS IPA.
 #
-# A `v*` tag builds the APK and attaches it to that tag's GitHub release as
-# hanzo-android-v<version>.apk, the name hanzo-inc/app's sync-releases resolves
-# (/^hanzo-android-v[\d.]+\.apk$/). This is the ONLY publisher: hanzo.yml has no
-# `binaries:` lane, because hanzoai/ci's would create the same release on the
-# same tag and race this one.
+# A `v*` tag builds both native release packages in parallel (`apk` on
+# heavy-linux-amd64, `ipa` on GitHub-hosted macos-15) and `publish` atomically
+# attaches all five assets to that tag's GitHub release:
+#   - hanzo-android-v<version>.apk  (matched by hanzo-inc/app sync-releases)
+#   - hanzo-android.apk             (stable direct link on hanzo.ai/download & docs)
+#   - hanzo-ios-v<version>.ipa      (unsigned Release iOS bundle)
+#   - hanzo-ios.ipa                 (stable direct link for AltServer-Linux / SideStore / zsign)
+#   - SHA256SUMS.txt
 #
-# A pull request that touches this file is the DRY RUN: the same build, then the
-# upload goes to a DRAFT release named dry-run-pr<N> (invisible to readers and to
-# releases/latest), is checked, and is deleted whether or not anything failed.
-# workflow_dispatch needs the workflow on the default branch, so a PR is the only
-# way to run a change to this file before it merges.
-name: Release APK
+# A pull request that touches this file is the DRY RUN: the same builds run,
+# `publish` uploads to a DRAFT release named dry-run-pr<N> (invisible to readers
+# and to releases/latest), checks every asset, and deletes the draft whether or
+# not anything failed.
+name: Release
 
 on:
   push:
@@ -34,7 +36,6 @@ defaults:
 
 jobs:
   apk:
-    # A fork's token is read-only and the dry run writes a draft release.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     # `heavy-` is a class the platform scheduler reads (6 CPU, 24Gi, 80Gi disk);
     # the `-amd64` suffix is what the runner fleet serves.
@@ -44,41 +45,7 @@ jobs:
       CI: '1'
       EXPO_NO_TELEMETRY: '1'
       COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
-      # The release this run writes to: the tag, or on a pull request the draft.
-      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || format('dry-run-pr{0}', github.event.pull_request.number) }}
-      DRAFT: ${{ github.event_name == 'pull_request' }}
     steps:
-      # First and alone, so the cleanup at the end has it however far the job got.
-      - name: Release helpers
-        run: |
-          cat > "$RUNNER_TEMP/release-api.sh" <<'EOF'
-          API="${GITHUB_API_URL:-https://api.github.com}"
-          R="$API/repos/$GITHUB_REPOSITORY"
-          # Prints the body on 2xx. On a refusal prints what the server said to
-          # stderr and fails: curl -f would throw the explanation away.
-          api() {
-            local out status
-            out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
-              -H 'Accept: application/vnd.github+json' "$@")
-            status=${out##*$'\n'}
-            case "$status" in 2*) printf '%s' "${out%$'\n'*}"; return 0 ;; esac
-            printf 'refused: %s %s\n%s\n' "$status" "$*" "$(printf '%s' "${out%$'\n'*}" | head -c 400)" >&2
-            return 1
-          }
-          # The release with this tag, drafts included (releases/tags/<tag> does
-          # not return a draft). Prints its JSON, or nothing.
-          find_release() {
-            local page=1 body hit
-            while :; do
-              body=$(api "$R/releases?per_page=100&page=$page") || return 1
-              [ "$(jq length <<<"$body")" -gt 0 ] || return 0
-              hit=$(jq -c --arg t "$1" '[.[] | select(.tag_name == $t)][0] // empty' <<<"$body")
-              if [ -n "$hit" ]; then printf '%s' "$hit"; return 0; fi
-              page=$((page + 1))
-            done
-          }
-          EOF
-
       - uses: actions/checkout@v4
 
       # The tag is the version of record: the APK reports app.json's version, so
@@ -95,8 +62,6 @@ jobs:
             echo "::error::tag $TAG disagrees with app.json expo.version $app. The tag is the version of record: set expo.version to ${TAG#v} and retag."
             exit 1
           fi
-          # Dots and digits only, or the asset name falls outside what the
-          # download page resolves and the release would ship invisible.
           printf '%s' "$app" | grep -Eq '^[0-9]+(\.[0-9]+)*$' \
             || { echo "::error::version $app is not digits and dots, so hanzo-android-v$app.apk would not match the download page"; exit 1; }
           echo "VERSION=$app" >> "$GITHUB_ENV"
@@ -105,8 +70,6 @@ jobs:
       - name: Install dependencies
         run: |
           set -euo pipefail
-          # corepack's default install directory is the node prefix, which this
-          # user cannot write.
           mkdir -p "$RUNNER_TEMP/bin"
           corepack enable --install-directory "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -127,16 +90,12 @@ jobs:
           echo "2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258  $RUNNER_TEMP/tools.zip" | sha256sum -c -
           unzip -q -o "$RUNNER_TEMP/tools.zip" -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-          # `yes` dies of SIGPIPE when sdkmanager finishes, which pipefail
-          # reports; what gradle needs is the licence file, so that is the test.
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           [ -s "$ANDROID_HOME/licenses/android-sdk-license" ] \
             || { echo "::error::android-sdk-license was not accepted"; exit 1; }
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "toolchain: node $(node -v), $(java -version 2>&1 | head -1), sdk $ANDROID_HOME"
 
-      # `android/` is generated and untracked, so the manifest and icons in the
-      # APK are whatever app.json says at this commit.
       - name: Prebuild
         run: |
           set -euo pipefail
@@ -160,7 +119,6 @@ jobs:
           mkdir -p dist
           APK="dist/hanzo-android-v$VERSION.apk"
           cp "${apks[0]}" "$APK"
-          echo "APK=$APK" >> "$GITHUB_ENV"
           unzip -l "$APK" | sed -n '1,4p;$p'
           python3 -I - "$APK" <<'EOF'
           import sys, zipfile
@@ -170,15 +128,12 @@ jobs:
               sys.exit(f"corrupt entry {bad}")
           if "AndroidManifest.xml" not in z.namelist():
               sys.exit("no AndroidManifest.xml")
-          # The manifest is binary XML; its string pool holds the package as
-          # UTF-16 or, in a newer aapt2, UTF-8.
           m = z.read("AndroidManifest.xml")
           pkg = "ai.hanzo.mobile"
           if pkg.encode("utf-16-le") not in m and pkg.encode() not in m:
               sys.exit(f"manifest does not name {pkg}")
           print(f"zip ok, {len(z.namelist())} entries, manifest names {pkg}")
           EOF
-          # aapt2 reads the manifest properly when build-tools brought one.
           aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | tail -1 || true)
           if [ -n "$aapt2" ]; then
             badging=$("$aapt2" dump badging "$APK" | sed -n 1p)
@@ -190,12 +145,228 @@ jobs:
           else
             echo "::notice::no aapt2 under $ANDROID_HOME/build-tools; manifest checked by string pool only"
           fi
-          # The template self-signs a release build; unsigned would not install.
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1 || true)
           if [ -n "$apksigner" ]; then "$apksigner" verify --print-certs "$APK" | sed -n 1,2p; fi
 
-      # Converges on a re-run: the release is found before it is made, and a
-      # same-named asset is dropped before the new one goes up.
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/hanzo-android-v*.apk
+          if-no-files-found: error
+          retention-days: 5
+
+  ipa:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version of record
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          set -euo pipefail
+          app=$(jq -r '.expo.version // empty' app.json)
+          [ -n "$app" ] || { echo "::error::app.json has no expo.version"; exit 1; }
+          if [ -n "$TAG" ] && [ "$TAG" != "v$app" ]; then
+            echo "::error::tag $TAG disagrees with app.json expo.version $app. The tag is the version of record: set expo.version to ${TAG#v} and retag."
+            exit 1
+          fi
+          printf '%s' "$app" | grep -Eq '^[0-9]+(\.[0-9]+)*$' \
+            || { echo "::error::version $app is not digits and dots"; exit 1; }
+          echo "VERSION=$app" >> "$GITHUB_ENV"
+          echo "version of record: $app (${TAG:-no tag, dry run})"
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          # app.json uses ./assets/expo.icon (Xcode 26 Icon Composer bundle);
+          # macos-15 provides Xcode 26 alongside Xcode 16.4.
+          latest_xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$latest_xcode" ] && [ -d "$latest_xcode/Contents/Developer" ]; then
+            sudo xcode-select -s "$latest_xcode/Contents/Developer"
+          fi
+          sudo xcodebuild -runFirstLaunch || true
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          corepack enable --install-directory "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          PATH="$RUNNER_TEMP/bin:$PATH"
+          pnpm install --frozen-lockfile
+
+      # HANZO_IOS_PERSONAL_TEAM=1 builds a single-target Hanzo.app without App
+      # Group / WidgetKit extension entitlements, so sideloaders (AltServer-Linux,
+      # SideStore, zsign + ideviceinstaller) can re-sign it with a free Apple ID.
+      - name: Prebuild iOS
+        run: |
+          set -euo pipefail
+          HANZO_IOS_PERSONAL_TEAM=1 npx expo prebuild --platform ios --no-install
+          printf 'export NODE_BINARY="%s"\n' "$(command -v node)" > ios/.xcode.env.local
+
+      - name: CocoaPods install
+        run: |
+          set -euo pipefail
+          command -v pod >/dev/null || brew install cocoapods
+          pod install --project-directory=ios || pod install --project-directory=ios --repo-update
+
+      - name: Build unsigned Release .app
+        run: |
+          set -euo pipefail
+          workspaces=(ios/*.xcworkspace)
+          [ "${#workspaces[@]}" -eq 1 ] && [ -d "${workspaces[0]}" ] \
+            || { echo "::error::expected one ios/*.xcworkspace, found: ${workspaces[*]}"; exit 1; }
+          WORKSPACE="${workspaces[0]}"
+          SCHEME=$(xcodebuild -list -json -workspace "$WORKSPACE" \
+            | jq -r '.workspace.schemes | map(select(. != "Pods" and (startswith("Pods-") | not))) | if index("Hanzo") then "Hanzo" else .[0] // empty end')
+          [ -n "$SCHEME" ] || { echo "::error::no app scheme found in $WORKSPACE"; exit 1; }
+          echo "building workspace=$WORKSPACE scheme=$SCHEME"
+          xcodebuild build \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ios-build" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            EXPANDED_CODE_SIGN_IDENTITY=""
+
+      - name: Package and check the IPA
+        run: |
+          set -euo pipefail
+          apps=("$RUNNER_TEMP"/ios-build/Build/Products/Release-iphoneos/*.app)
+          [ "${#apps[@]}" -eq 1 ] && [ -d "${apps[0]}" ] \
+            || { echo "::error::expected one Release-iphoneos .app, found: ${apps[*]}"; exit 1; }
+          APP_PATH="${apps[0]}"
+          APP_NAME=$(basename "$APP_PATH")
+          STAGE="$RUNNER_TEMP/ipa-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/Payload" dist
+          cp -R "$APP_PATH" "$STAGE/Payload/"
+          IPA="dist/hanzo-ios-v$VERSION.ipa"
+          (cd "$STAGE" && zip -qry "$GITHUB_WORKSPACE/$IPA" Payload)
+          unzip -l "$IPA" | sed -n '1,6p;$p'
+          python3 - "$IPA" "$APP_NAME" "$VERSION" <<'EOF'
+          import plistlib, sys, zipfile
+          ipa_path, app_name, expected_version = sys.argv[1], sys.argv[2], sys.argv[3]
+          z = zipfile.ZipFile(ipa_path)
+          bad = z.testzip()
+          if bad:
+              sys.exit(f"corrupt zip entry {bad}")
+          names = set(z.namelist())
+          info_key = f"Payload/{app_name}/Info.plist"
+          if info_key not in names:
+              sys.exit(f"missing {info_key} in IPA")
+          info = plistlib.loads(z.read(info_key))
+          bundle_id = info.get("CFBundleIdentifier")
+          short_ver = info.get("CFBundleShortVersionString")
+          exe = info.get("CFBundleExecutable")
+          if bundle_id != "ai.hanzo.mobile":
+              sys.exit(f"expected CFBundleIdentifier ai.hanzo.mobile, got {bundle_id}")
+          if short_ver != expected_version:
+              sys.exit(f"expected CFBundleShortVersionString {expected_version}, got {short_ver}")
+          exe_key = f"Payload/{app_name}/{exe}"
+          if not exe or exe_key not in names:
+              sys.exit(f"missing executable {exe_key} in IPA")
+          bundle_js = f"Payload/{app_name}/main.jsbundle"
+          if bundle_js not in names:
+              sys.exit(f"missing embedded JS bundle {bundle_js} in IPA")
+          print(f"ipa ok: {len(names)} entries, {bundle_id} {short_ver}, executable={exe}, main.jsbundle present")
+          EOF
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: dist/hanzo-ios-v*.ipa
+          if-no-files-found: error
+          retention-days: 5
+
+  publish:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [apk, ipa]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || format('dry-run-pr{0}', github.event.pull_request.number) }}
+      DRAFT: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Release helpers
+        run: |
+          cat > "$RUNNER_TEMP/release-api.sh" <<'EOF'
+          API="${GITHUB_API_URL:-https://api.github.com}"
+          R="$API/repos/$GITHUB_REPOSITORY"
+          api() {
+            local out status
+            out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' "$@")
+            status=${out##*$'\n'}
+            case "$status" in 2*) printf '%s' "${out%$'\n'*}"; return 0 ;; esac
+            printf 'refused: %s %s\n%s\n' "$status" "$*" "$(printf '%s' "${out%$'\n'*}" | head -c 400)" >&2
+            return 1
+          }
+          find_release() {
+            local page=1 body hit
+            while :; do
+              body=$(api "$R/releases?per_page=100&page=$page") || return 1
+              [ "$(jq length <<<"$body")" -gt 0 ] || return 0
+              hit=$(jq -c --arg t "$1" '[.[] | select(.tag_name == $t)][0] // empty' <<<"$body")
+              if [ -n "$hit" ]; then printf '%s' "$hit"; return 0; fi
+              page=$((page + 1))
+            done
+          }
+          EOF
+
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: dist
+
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-ipa
+          path: dist
+
+      - name: Prepare stable aliases and SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r '.expo.version' app.json)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          cp "dist/hanzo-android-v$VERSION.apk" "dist/hanzo-android.apk"
+          cp "dist/hanzo-ios-v$VERSION.ipa" "dist/hanzo-ios.ipa"
+          (
+            cd dist
+            sha256sum \
+              "hanzo-android-v$VERSION.apk" \
+              "hanzo-android.apk" \
+              "hanzo-ios-v$VERSION.ipa" \
+              "hanzo-ios.ipa" > SHA256SUMS.txt
+          )
+          cat dist/SHA256SUMS.txt
+
       - name: Publish to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -203,34 +374,61 @@ jobs:
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/release-api.sh"
-          name=$(basename "$APK")
           rel=$(find_release "$RELEASE_TAG")
           if [ -z "$rel" ]; then
             rel=$(api -X POST -H 'Content-Type: application/json' "$R/releases" -d "$(jq -nc \
               --arg t "$RELEASE_TAG" --arg c "$TARGET" --argjson d "$DRAFT" \
-              '{tag_name: $t, target_commitish: $c, name: $t, draft: $d, generate_release_notes: ($d | not)}')") \
+              --arg n "Hanzo Mobile $RELEASE_TAG (Android APK & iOS IPA)" \
+              '{tag_name: $t, target_commitish: $c, name: $n, draft: $d, prerelease: false, make_latest: (if $d then "false" else "true" end), generate_release_notes: ($d | not)}')") \
               || rel=$(find_release "$RELEASE_TAG")
+          elif [ "$DRAFT" = "false" ]; then
+            rel=$(api -X PATCH -H 'Content-Type: application/json' "$R/releases/$(jq -r .id <<<"$rel")" -d \
+              '{"draft":false,"prerelease":false,"make_latest":"true"}')
           fi
           [ -n "$rel" ] || { echo "::error::could not find or create release $RELEASE_TAG"; exit 1; }
           id=$(jq -r .id <<<"$rel")
-          echo "release $RELEASE_TAG id=$id draft=$(jq -r .draft <<<"$rel")"
-          for old in $(api "$R/releases/$id/assets?per_page=100" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id'); do
-            api -X DELETE "$R/releases/assets/$old" >/dev/null
-          done
           up=$(jq -r '.upload_url | sub("\\{.*$"; "")' <<<"$rel")
-          api -X POST -H 'Content-Type: application/vnd.android.package-archive' \
-            --data-binary @"$APK" "$up?name=$name" >/dev/null
-          # What a reader of the release now sees.
+          echo "release $RELEASE_TAG id=$id draft=$(jq -r .draft <<<"$rel")"
+
+          FILES=(
+            "dist/hanzo-android-v$VERSION.apk"
+            "dist/hanzo-android.apk"
+            "dist/hanzo-ios-v$VERSION.ipa"
+            "dist/hanzo-ios.ipa"
+            "dist/SHA256SUMS.txt"
+          )
+
+          existing=$(api "$R/releases/$id/assets?per_page=100")
+          for path in "${FILES[@]}"; do
+            name=$(basename "$path")
+            for old in $(jq -r --arg n "$name" '.[] | select(.name == $n) | .id' <<<"$existing"); do
+              api -X DELETE "$R/releases/assets/$old" >/dev/null
+            done
+            case "$name" in
+              *.apk) ctype='application/vnd.android.package-archive' ;;
+              *.ipa) ctype='application/octet-stream' ;;
+              *)     ctype='text/plain; charset=utf-8' ;;
+            esac
+            api -X POST -H "Content-Type: $ctype" --data-binary @"$path" "$up?name=$name" >/dev/null
+          done
+
           assets=$(api "$R/releases/$id/assets?per_page=100")
           jq -r '.[] | "asset \(.name)  \(.size) bytes  \(.state)"' <<<"$assets"
-          got=$(jq -r --arg n "$name" '.[] | select(.name == $n) | "\(.size) \(.state)"' <<<"$assets")
-          [ "$got" = "$(stat -c %s "$APK") uploaded" ] \
-            || { echo "::error::$name is not on release $RELEASE_TAG intact (saw: ${got:-absent})"; exit 1; }
+          for path in "${FILES[@]}"; do
+            name=$(basename "$path")
+            got=$(jq -r --arg n "$name" '.[] | select(.name == $n) | "\(.size) \(.state)"' <<<"$assets")
+            [ "$got" = "$(stat -c %s "$path") uploaded" ] \
+              || { echo "::error::$name is not on release $RELEASE_TAG intact (saw: ${got:-absent})"; exit 1; }
+          done
           jq -r '.[].name' <<<"$assets" | grep -Eq '^hanzo-android-v[0-9.]+\.apk$' \
-            || { echo "::error::no asset on the release matches the download page pattern"; exit 1; }
+            || { echo "::error::no versioned APK matches download page pattern"; exit 1; }
+          jq -r '.[].name' <<<"$assets" | grep -Eq '^hanzo-ios-v[0-9.]+\.ipa$' \
+            || { echo "::error::no versioned IPA on release"; exit 1; }
           {
-            echo "### $name on \`$RELEASE_TAG\`"
-            echo "sha256 \`$(sha256sum "$APK" | cut -d' ' -f1)\`, $(stat -c %s "$APK") bytes"
+            echo "### Release \`$RELEASE_TAG\`"
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Delete the dry-run draft

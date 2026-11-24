@@ -18,11 +18,14 @@ public class WidgetModule: Module {
       // missing group.ai.hanzo.mobile), and saying so in the log is the
       // difference between a five-minute fix and a widget that mysteriously
       // reads "Open Hanzo to sync" forever.
+      let configured = (Bundle.main.object(forInfoDictionaryKey: "HanzoAppGroup") as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      let group = (configured?.isEmpty == false ? configured : nil) ?? "group.ai.hanzo.mobile"
       guard FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.ai.hanzo.mobile") != nil,
-        let defaults = UserDefaults(suiteName: "group.ai.hanzo.mobile")
+        forSecurityApplicationGroupIdentifier: group) != nil,
+        let defaults = UserDefaults(suiteName: group)
       else {
-        NSLog("[widget] app group entitlement group.ai.hanzo.mobile missing — widget state not shared")
+        NSLog("[widget] app group entitlement \(group) missing — widget state not shared")
         return
       }
       defaults.set(stateJson, forKey: "widget.state")
