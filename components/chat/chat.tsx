@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { refuse, type Refusal } from '@/lib/api'
 import { defaultModel, models, vision } from '@/lib/models'
+import * as prefs from '@/lib/prefs'
 import { token } from '@/lib/store'
 
 import { Composer } from './composer'
@@ -36,6 +37,7 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
   const abort = useRef<AbortController | null>(null)
 
   const [signed, setSigned] = useState<boolean | null>(null)
+  const [guest, setGuest] = useState<boolean>(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [loaded, setLoaded] = useState(ephemeral === true)
   const [streaming, setStreaming] = useState(false)
@@ -49,8 +51,10 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
   useFocusEffect(
     useCallback(() => {
       let live = true
-      token().then((value) => {
-        if (live) setSigned(value !== null)
+      Promise.all([token(), prefs.hydrate()]).then(([value, loadedPrefs]) => {
+        if (!live) return
+        setGuest(loadedPrefs.guestMode)
+        setSigned(value !== null)
       })
       return () => {
         live = false
@@ -88,10 +92,10 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
   }, [ephemeral, loaded, messages])
 
   useEffect(() => {
-    if (!ephemeral && signed === false) {
+    if (!ephemeral && signed === false && !guest) {
       router.replace('/auth')
     }
-  }, [ephemeral, signed, router])
+  }, [ephemeral, signed, guest, router])
 
   // The unmount must not leave a stream running into dead state.
   useEffect(() => () => abort.current?.abort(), [])
@@ -156,23 +160,53 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
 
   const last = messages[messages.length - 1]
 
-  if (signed === null || (!signed && !ephemeral)) {
+  if (signed === null || (!signed && !guest && !ephemeral)) {
     return <YStack flex={1} bg="#000000" />
   }
 
   if (!signed) {
     return (
-      <YStack flex={1} bg="$background" items="center" justify="center" p="$6">
-        <Card p="$5" width="100%" maxW={420} bg="$color2" borderWidth={1} borderColor="$borderColor" rounded="$6">
-          <Text color="$color" fontSize={17} fontWeight="600">
-            {ephemeral ? 'Private chat' : 'Chat'}
+      <YStack flex={1} bg="#000000" items="center" justify="center" p="$6">
+        <Card
+          p="$5"
+          width="100%"
+          maxW={400}
+          bg="#0d0d10"
+          borderWidth={1}
+          borderColor="rgba(255,255,255,0.08)"
+          rounded="$4"
+          gap="$2.5"
+        >
+          <Text color="#ffffff" fontSize={18} fontWeight="600">
+            {ephemeral ? 'Private chat' : 'Hanzo Local Mode'}
           </Text>
-          <Text color="$color11" mt="$2" fontSize={14} lineHeight={20}>
-            Nothing is signed in on this device. Sign in with Hanzo ID or paste an API key to talk to Hanzo.
+          <Text color="rgba(250,250,250,0.58)" fontSize={14} lineHeight={20}>
+            Sign in with Hanzo ID for cloud models, or configure a local hanzod node and custom gateway in Settings.
           </Text>
-          <Button mt="$4" bg="$color" color="$background" onPress={() => router.push('/auth')}>
-            Sign in
-          </Button>
+          <XStack gap="$2.5" mt="$2">
+            <Button
+              flex={1}
+              bg="#ffffff"
+              color="#09090b"
+              fontWeight="600"
+              rounded={10}
+              onPress={() => router.push('/auth')}
+            >
+              Sign in
+            </Button>
+            <Button
+              flex={1}
+              bg="#16161c"
+              borderWidth={1}
+              borderColor="rgba(255,255,255,0.1)"
+              color="#fafafa"
+              fontWeight="500"
+              rounded={10}
+              onPress={() => router.push('/(tabs)/settings')}
+            >
+              Open Settings
+            </Button>
+          </XStack>
         </Card>
       </YStack>
     )

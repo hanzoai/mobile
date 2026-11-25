@@ -2,8 +2,20 @@ import { token } from './store'
 
 export const base = 'https://api.hanzo.ai'
 
+let activeBase = base
+
+export function setBase(next: string | null | undefined): void {
+  const trimmed = next?.trim().replace(/\/+$/, '')
+  activeBase = trimmed && /^https?:\/\//i.test(trimmed) ? trimmed : base
+}
+
+export function currentBase(): string {
+  return activeBase
+}
+
 export function v1(path: string): string {
-  return `${base}/v1${path.startsWith('/') ? path : `/${path}`}`
+  const clean = activeBase.replace(/\/v1$/, '')
+  return `${clean}/v1${path.startsWith('/') ? path : `/${path}`}`
 }
 
 // Headers for an authenticated call. An absent credential returns no header

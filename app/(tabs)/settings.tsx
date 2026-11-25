@@ -1,16 +1,45 @@
-import { Button, Card, ScrollView, Separator, Spinner, Text, XStack, YStack } from '@hanzo/gui'
+import { Button, Input, ScrollView, Spinner, Text, XStack, YStack } from '@hanzo/gui'
+import {
+  Check,
+  Cpu,
+  ExternalLink,
+  Eye,
+  Globe,
+  Info,
+  Key,
+  Layers,
+  LogIn,
+  LogOut,
+  Palette,
+  Server,
+  Shield,
+  Smartphone,
+  Sparkles,
+  Terminal,
+  User,
+  Wifi,
+} from '@hanzogui/lucide-icons-2'
 import Constants from 'expo-constants'
+import * as Linking from 'expo-linking'
 import { useFocusEffect, useRouter } from 'expo-router'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-import { refuse } from '@/lib/api'
+import {
+  SETTINGS_CARD_BG,
+  SETTINGS_CARD_BORDER,
+  SettingsItemRow,
+  SettingsPillToggle,
+  SettingsSearchInput,
+  SettingsSectionCard,
+} from '@/components/settings/primitives'
+import { base, refuse } from '@/lib/api'
 import { defaultModel, models } from '@/lib/models'
+import * as prefs from '@/lib/prefs'
 import * as store from '@/lib/store'
 
-// The IAM access token is a JWT; its payload names the account. Read
-// strictly and degrade to null — a token that does not parse still signs
-// requests fine, so the card then states the kind and nothing invented.
+import type { ReactNode } from 'react'
+
 function claims(token: string): Record<string, unknown> | null {
   const part = token.split('.')[1]
   if (!part || typeof atob !== 'function') return null
@@ -31,41 +60,36 @@ function said(source: Record<string, unknown> | null, keys: string[]): string | 
   return null
 }
 
-function Label({ children }: { children: string }) {
-  return (
-    <Text color="$color11" fontSize={12} fontWeight="600" letterSpacing={1.2} mt="$2">
-      {children.toUpperCase()}
-    </Text>
-  )
-}
-
-function Row({ name, value }: { name: string; value: string }) {
-  return (
-    <XStack items="center" justify="space-between" py="$2.5" gap="$3">
-      <Text color="$color11" fontSize={14}>
-        {name}
-      </Text>
-      <Text color="$color" fontSize={14} numberOfLines={1} shrink={1}>
-        {value}
-      </Text>
-    </XStack>
-  )
+type RenderedRow = prefs.SettingsRowMeta & {
+  icon: ReactNode
+  trailing?: ReactNode
+  showChevron?: boolean
+  onPress?: () => void
 }
 
 export default function Settings() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
+  const currentPrefs = useSyncExternalStore(prefs.subscribe, prefs.snapshot)
 
-  // undefined is the first read only; null is honestly signed out.
   const [credential, setCredential] = useState<store.Credential | null | undefined>(undefined)
   const [model, setModel] = useState<string | null>(null)
   const [modelNote, setModelNote] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [editingGateway, setEditingGateway] = useState(false)
+  const [gatewayDraft, setGatewayDraft] = useState(currentPrefs.apiBase)
+  const [editingNode, setEditingNode] = useState(false)
+  const [nodeDraft, setNodeDraft] = useState(currentPrefs.localNodeUrl)
+  const [nodeStatus, setNodeStatus] = useState<string | null>(null)
 
-  // Re-read on every focus so a sign-in on /auth or a cleared key elsewhere
-  // shows here without a restart.
   useFocusEffect(
     useCallback(() => {
       let live = true
+      void prefs.hydrate().then((loaded) => {
+        if (!live) return
+        setGatewayDraft(loaded.apiBase)
+        setNodeDraft(loaded.localNodeUrl)
+      })
       store.get().then((stored) => {
         if (!live) return
         setCredential(stored)
@@ -78,7 +102,7 @@ export default function Settings() {
           .then((ids) => {
             if (!live) return
             setModel(defaultModel(ids))
-            setModelNote(ids.length ? null : 'The catalog returned no models.')
+            setModelNote(ids.length ? null : 'Catalog empty')
           })
           .catch((error) => {
             if (!live) return
@@ -94,94 +118,388 @@ export default function Settings() {
 
   async function out() {
     await store.clear()
+    await prefs.update({ guestMode: false })
     setCredential(null)
     setModel(null)
     setModelNote(null)
     router.replace('/auth')
   }
 
+  async function saveGateway() {
+    const next = gatewayDraft.trim() || base
+    await prefs.update({ apiBase: next })
+    setGatewayDraft(next)
+    setEditingGateway(false)
+  }
+
+  async function saveNode() {
+    const next = nodeDraft.trim() || prefs.DEFAULT_LOCAL_NODE
+    await prefs.update({ localNodeUrl: next, localNodeEnabled: true })
+    setNodeDraft(next)
+    setEditingNode(false)
+    setNodeStatus('Checking…')
+    try {
+      const res = await fetch(`${next.replace(/\/+$/, '')}/v1/models`)
+      setNodeStatus(res.ok ? 'Reachable' : `HTTP ${res.status}`)
+    } catch {
+      setNodeStatus('Offline')
+    }
+  }
+
   const payload = credential?.kind === 'iam' ? claims(credential.token) : null
   const email = said(payload, ['email', 'preferred_username'])
   const org = said(payload, ['org', 'org_name', 'org_id'])
-  const version = Constants.expoConfig?.version ?? '0.0.0'
+  const version = Constants.expoConfig?.version ?? '2.3.5'
+
+  const accountSubtitle =
+    credential === undefined
+      ? 'Checking device keychain…'
+      : credential === null
+        ? currentPrefs.guestMode
+          ? 'Local / guest session · tap to sign in'
+          : 'Not signed in on this device'
+        : credential.kind === 'iam'
+          ? [email ?? 'Hanzo ID SSO', org].filter(Boolean).join(' · ')
+          : `API key ${credential.token.slice(0, 8)}…`
+
+  const groups = useMemo<prefs.SettingsGroupMeta<RenderedRow>[]>(
+    () => [
+      {
+        title: 'Account',
+        rows: [
+          {
+            id: 'account-status',
+            label: credential ? 'Hanzo Account' : 'Sign in to Hanzo',
+            subtitle: accountSubtitle,
+            value: credential ? (credential.kind === 'iam' ? 'Hanzo ID' : 'API Key') : 'Sign in',
+            icon: credential ? <User size={16} color="#fafafa" /> : <LogIn size={16} color="#fafafa" />,
+            trailing:
+              credential === undefined ? (
+                <Spinner size="small" color="$color10" />
+              ) : credential === null ? (
+                <Button
+                  size="$2.5"
+                  bg="#ffffff"
+                  color="#09090b"
+                  fontWeight="600"
+                  fontSize={12}
+                  rounded={9999}
+                  px="$3"
+                  onPress={() => router.push('/auth')}
+                >
+                  Sign in
+                </Button>
+              ) : (
+                <Button
+                  size="$2.5"
+                  bg="#18181d"
+                  borderWidth={1}
+                  borderColor="rgba(255,255,255,0.1)"
+                  color="#fafafa"
+                  fontSize={12}
+                  rounded={9999}
+                  px="$3"
+                  icon={<LogOut size={13} color="#fafafa" />}
+                  onPress={out}
+                >
+                  {credential.kind === 'iam' ? 'Sign out' : 'Remove'}
+                </Button>
+              ),
+            onPress: credential === null ? () => router.push('/auth') : undefined,
+          },
+          {
+            id: 'account-issuer',
+            label: 'Identity Provider',
+            subtitle: 'OIDC PKCE · Google, GitHub & Email',
+            value: 'hanzo.id',
+            icon: <Shield size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'account-keychain',
+            label: 'Credential Storage',
+            subtitle: 'Hardware-backed platform SecureStore',
+            value: credential ? 'Active' : 'Empty',
+            icon: <Key size={16} color="#a1a1aa" />,
+          },
+        ],
+      },
+      {
+        title: 'Appearance',
+        rows: [
+          {
+            id: 'appearance-theme',
+            label: 'Theme',
+            subtitle: 'True-black OLED canvas across all surfaces',
+            value: 'Pure Black',
+            icon: <Palette size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'appearance-brand',
+            label: 'UI Design System',
+            subtitle: 'Shared Hanzo Dev & Desktop tokens',
+            value: '@hanzo/gui',
+            icon: <Sparkles size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'appearance-pip',
+            label: 'Live Run Picture-in-Picture',
+            subtitle: 'Keep active agent & voice runs visible',
+            value: currentPrefs.pipEnabled ? 'On' : 'Off',
+            icon: <Layers size={16} color="#a1a1aa" />,
+            trailing: (
+              <SettingsPillToggle
+                enabled={currentPrefs.pipEnabled}
+                onToggle={() => void prefs.update({ pipEnabled: !currentPrefs.pipEnabled })}
+              />
+            ),
+          },
+        ],
+      },
+      {
+        title: 'Models & API',
+        rows: [
+          {
+            id: 'models-chat',
+            label: 'Default Chat Model',
+            subtitle: modelNote ?? 'Auto-selected from live /v1/models catalog',
+            value: model ?? 'zen5',
+            icon: <Cpu size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'models-gen',
+            label: 'Gen Coding Harness',
+            subtitle: 'Cloud & local hanzod agentic sessions',
+            value: 'enso-auto',
+            icon: <Terminal size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'models-vision',
+            label: 'Multimodal Vision',
+            subtitle: 'Used automatically when images are attached',
+            value: 'zen-vl',
+            icon: <Eye size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'models-gateway',
+            label: 'API Gateway',
+            subtitle: currentPrefs.apiBase,
+            value: editingGateway ? 'Editing' : 'Edit',
+            icon: <Globe size={16} color="#a1a1aa" />,
+            showChevron: !editingGateway,
+            onPress: () => setEditingGateway((v) => !v),
+          },
+        ],
+      },
+      {
+        title: 'Local Node',
+        rows: [
+          {
+            id: 'local-enabled',
+            label: 'Use Local hanzod Node',
+            subtitle: 'Route Gen coding sessions to LAN or localhost node',
+            value: currentPrefs.localNodeEnabled ? 'Enabled' : 'Off',
+            icon: <Server size={16} color="#a1a1aa" />,
+            trailing: (
+              <SettingsPillToggle
+                enabled={currentPrefs.localNodeEnabled}
+                onToggle={() =>
+                  void prefs.update({ localNodeEnabled: !currentPrefs.localNodeEnabled })
+                }
+              />
+            ),
+          },
+          {
+            id: 'local-endpoint',
+            label: 'Node Endpoint',
+            subtitle: currentPrefs.localNodeUrl,
+            value: nodeStatus ?? (editingNode ? 'Editing' : 'Configure'),
+            icon: <Wifi size={16} color="#a1a1aa" />,
+            showChevron: !editingNode,
+            onPress: () => setEditingNode((v) => !v),
+          },
+        ],
+      },
+      {
+        title: 'About',
+        rows: [
+          {
+            id: 'about-version',
+            label: 'Version',
+            subtitle: 'Hanzo Mobile Release',
+            value: `v${version}`,
+            icon: <Info size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'about-package',
+            label: 'Bundle Identifier',
+            subtitle: 'Android & iOS Universal Binary',
+            value: 'ai.hanzo.mobile',
+            icon: <Smartphone size={16} color="#a1a1aa" />,
+          },
+          {
+            id: 'about-privacy',
+            label: 'Privacy & Terms',
+            subtitle: 'hanzo.ai/privacy',
+            value: 'Open',
+            icon: <ExternalLink size={16} color="#a1a1aa" />,
+            showChevron: true,
+            onPress: () => void Linking.openURL('https://hanzo.ai/privacy'),
+          },
+        ],
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [credential, accountSubtitle, currentPrefs, model, modelNote, editingGateway, editingNode, nodeStatus, version]
+  )
+
+  const filtered = useMemo(() => prefs.filterSettingsGroups(groups, query), [groups, query])
 
   return (
-    <ScrollView flex={1} bg="$background" contentContainerStyle={{ p: 20, pt: insets.top + 16, pb: 32 }}>
-      <YStack gap="$3">
-        <Text color="$color" fontSize={28} fontWeight="700">
-          Settings
-        </Text>
+    <ScrollView
+      flex={1}
+      bg="#000000"
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={{
+        px: 18,
+        pt: insets.top + 14,
+        pb: Math.max(insets.bottom, 24) + 20,
+      }}
+    >
+      <YStack gap="$4" width="100%" maxW={560} self="center">
+        <YStack gap="$3">
+          <Text color="#ffffff" fontSize={28} fontWeight="700" letterSpacing={-0.6}>
+            Settings
+          </Text>
+          <SettingsSearchInput value={query} onChangeText={setQuery} />
+        </YStack>
 
-        <Label>Account</Label>
-        {credential === undefined ? (
-          <XStack p="$4" justify="center">
-            <Spinner color="$color11" />
-          </XStack>
-        ) : credential === null ? (
-          <Card p="$4" bg="$color2" borderWidth={1} borderColor="$borderColor" rounded="$6">
-            <Text color="$color" fontSize={15} fontWeight="600">
-              Signed out
+        {editingGateway ? (
+          <YStack
+            p="$3.5"
+            bg={SETTINGS_CARD_BG}
+            borderWidth={1}
+            borderColor={SETTINGS_CARD_BORDER}
+            rounded="$4"
+            gap="$2.5"
+          >
+            <Text color="#fafafa" fontSize={13} fontWeight="600">
+              API Gateway URL
             </Text>
-            <Text color="$color11" mt="$1.5" fontSize={13} lineHeight={19}>
-              Nothing is signed in on this device. Use Hanzo ID or paste an sk- API key.
+            <XStack gap="$2" items="center">
+              <Input
+                flex={1}
+                value={gatewayDraft}
+                onChangeText={setGatewayDraft}
+                placeholder="https://api.hanzo.ai"
+                placeholderTextColor="$color10"
+                bg="#000000"
+                borderWidth={1}
+                borderColor="rgba(255,255,255,0.12)"
+                rounded="$3"
+                height={40}
+                color="#fafafa"
+                fontSize={13}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Button
+                size="$3"
+                height={40}
+                bg="#ffffff"
+                color="#09090b"
+                fontWeight="600"
+                rounded="$3"
+                icon={<Check size={14} color="#09090b" />}
+                onPress={saveGateway}
+              >
+                Save
+              </Button>
+            </XStack>
+          </YStack>
+        ) : null}
+
+        {editingNode ? (
+          <YStack
+            p="$3.5"
+            bg={SETTINGS_CARD_BG}
+            borderWidth={1}
+            borderColor={SETTINGS_CARD_BORDER}
+            rounded="$4"
+            gap="$2.5"
+          >
+            <Text color="#fafafa" fontSize={13} fontWeight="600">
+              Local hanzod Endpoint
             </Text>
-            <Button mt="$3" self="flex-start" size="$3" bg="$color" color="$background" onPress={() => router.push('/auth')}>
-              Sign in
-            </Button>
-          </Card>
+            <XStack gap="$2" items="center">
+              <Input
+                flex={1}
+                value={nodeDraft}
+                onChangeText={setNodeDraft}
+                placeholder="http://127.0.0.1:3690"
+                placeholderTextColor="$color10"
+                bg="#000000"
+                borderWidth={1}
+                borderColor="rgba(255,255,255,0.12)"
+                rounded="$3"
+                height={40}
+                color="#fafafa"
+                fontSize={13}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Button
+                size="$3"
+                height={40}
+                bg="#ffffff"
+                color="#09090b"
+                fontWeight="600"
+                rounded="$3"
+                icon={<Check size={14} color="#09090b" />}
+                onPress={saveNode}
+              >
+                Save
+              </Button>
+            </XStack>
+          </YStack>
+        ) : null}
+
+        {filtered.length === 0 ? (
+          <YStack
+            p="$6"
+            bg={SETTINGS_CARD_BG}
+            borderWidth={1}
+            borderColor={SETTINGS_CARD_BORDER}
+            rounded="$4"
+            items="center"
+            gap="$1.5"
+          >
+            <Text color="#fafafa" fontSize={15} fontWeight="600">
+              No results
+            </Text>
+            <Text color="rgba(250,250,250,0.5)" fontSize={13} text="center">
+              No settings match “{query.trim()}”.
+            </Text>
+          </YStack>
         ) : (
-          <Card px="$4" py="$2" bg="$color2" borderWidth={1} borderColor="$borderColor" rounded="$6">
-            {credential.kind === 'iam' ? (
-              <>
-                <Row name="Identity" value="Hanzo ID" />
-                {email ? (
-                  <>
-                    <Separator borderColor="$borderColor" />
-                    <Row name="Email" value={email} />
-                  </>
-                ) : null}
-                {org ? (
-                  <>
-                    <Separator borderColor="$borderColor" />
-                    <Row name="Org" value={org} />
-                  </>
-                ) : null}
-              </>
-            ) : (
-              <Row name="API key" value={`${credential.token.slice(0, 8)}…`} />
-            )}
-            <Separator borderColor="$borderColor" />
-            <Button my="$2.5" self="flex-start" size="$3" bg="$color3" color="$color" onPress={out}>
-              {credential.kind === 'iam' ? 'Sign out' : 'Remove key'}
-            </Button>
-          </Card>
+          filtered.map((group) => (
+            <SettingsSectionCard key={group.title} title={group.title}>
+              {group.rows.map((row, idx) => (
+                <SettingsItemRow
+                  key={row.id}
+                  icon={row.icon}
+                  label={row.label}
+                  subtitle={row.subtitle}
+                  value={row.value}
+                  trailing={row.trailing}
+                  showChevron={row.showChevron}
+                  isLast={idx === group.rows.length - 1}
+                  onPress={row.onPress}
+                />
+              ))}
+            </SettingsSectionCard>
+          ))
         )}
-
-        <Label>Model</Label>
-        <Card px="$4" py="$2" bg="$color2" borderWidth={1} borderColor="$borderColor" rounded="$6">
-          {credential ? (
-            model ? (
-              <Row name="Default chat model" value={model} />
-            ) : (
-              <Text color="$color11" py="$2.5" fontSize={13} lineHeight={19}>
-                {modelNote ?? 'Loading the live catalog.'}
-              </Text>
-            )
-          ) : (
-            <Text color="$color11" py="$2.5" fontSize={13} lineHeight={19}>
-              The default is picked from the live catalog once a credential exists.
-            </Text>
-          )}
-        </Card>
-
-        <Label>About</Label>
-        <Card px="$4" py="$2" bg="$color2" borderWidth={1} borderColor="$borderColor" rounded="$6">
-          <Row name="Version" value={version} />
-          <Separator borderColor="$borderColor" />
-          <Row name="API" value="api.hanzo.ai" />
-          <Separator borderColor="$borderColor" />
-          <Row name="Identity" value="hanzo.id" />
-        </Card>
       </YStack>
     </ScrollView>
   )

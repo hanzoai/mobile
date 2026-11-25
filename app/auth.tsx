@@ -7,7 +7,8 @@ import { KeyboardAvoidingView, Platform, ScrollView } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { ClipPath, Defs, G, LinearGradient, Path, Polygon, RadialGradient, Rect, Stop } from 'react-native-svg'
 
-import { reason, refusal, v1 } from '@/lib/api'
+import { currentBase, reason, refusal, v1 } from '@/lib/api'
+import * as prefs from '@/lib/prefs'
 import * as store from '@/lib/store'
 
 // Closes the auth browser tab when the redirect lands back on the deep link.
@@ -67,32 +68,49 @@ function HanzoAppSquircle({ size = 64 }: { size?: number }) {
   )
 }
 
-function HanzoFooterMark({ size = 20 }: { size?: number }) {
+function GoogleIcon() {
   return (
-    <Svg width={size} height={size} viewBox="0 0 67 67" accessibilityLabel="Hanzo">
-      <Path d="M22.21 67V44.6369H0V67H22.21Z" fill="#ffffff" />
-      <Path d="M0 44.6369L22.21 46.8285V44.6369H0Z" fill="#DDDDDD" />
-      <Path d="M66.7038 22.3184H22.2534L0.0878906 44.6367H44.4634L66.7038 22.3184Z" fill="#ffffff" />
-      <Path d="M22.21 0H0V22.3184H22.21V0Z" fill="#ffffff" />
-      <Path d="M66.7198 0H44.5098V22.3184H66.7198V0Z" fill="#ffffff" />
-      <Path d="M66.6753 22.3185L44.5098 20.0822V22.3185H66.6753Z" fill="#DDDDDD" />
-      <Path d="M66.7198 67V44.6369H44.5098V67H66.7198Z" fill="#ffffff" />
+    <Svg width={18} height={18} viewBox="0 0 24 24">
+      <Path
+        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+        fill="#4285F4"
+      />
+      <Path
+        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+        fill="#34A853"
+      />
+      <Path
+        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+        fill="#FBBC05"
+      />
+      <Path
+        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+        fill="#EA4335"
+      />
     </Svg>
   )
 }
 
-// Sign-in, both paths real: Hanzo IAM over OIDC PKCE against hanzo.id —
-// never a custom flow — and a pasted API key proven against GET /v1/models
-// before it is kept. The issuer and client id live in lib/store beside the
-// credential they mint. Whatever the server refuses with is shown verbatim;
-// invented sentences are how users end up debugging the wrong thing.
+function GitHubIcon() {
+  return (
+    <Svg width={18} height={18} viewBox="0 0 24 24">
+      <Path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M12 1.5C6.2 1.5 1.5 6.2 1.5 12c0 4.64 3.01 8.57 7.18 9.96.53.1.72-.23.72-.51v-1.8c-2.92.63-3.54-1.41-3.54-1.41-.48-1.21-1.17-1.53-1.17-1.53-.95-.65.07-.64.07-.64 1.05.07 1.61 1.08 1.61 1.08.94 1.6 2.46 1.14 3.06.87.1-.68.37-1.14.67-1.4-2.33-.27-4.78-1.17-4.78-5.19 0-1.15.41-2.08 1.08-2.82-.11-.27-.47-1.34.1-2.79 0 0 .88-.28 2.89 1.08a10.03 10.03 0 0 1 5.26 0c2.01-1.36 2.89-1.08 2.89-1.08.57 1.45.21 2.52.1 2.79.67.74 1.08 1.67 1.08 2.82 0 4.03-2.46 4.92-4.8 5.18.38.33.72.97.72 1.96v2.9c0 .28.19.62.73.51A10.51 10.51 0 0 0 22.5 12C22.5 6.2 17.8 1.5 12 1.5Z"
+        fill="#ffffff"
+      />
+    </Svg>
+  )
+}
+
+// Sign-in, all paths real: Hanzo IAM over OIDC PKCE against hanzo.id (direct or
+// federated via Google / GitHub), a pasted API key proven against GET /v1/models
+// before it is kept, and local/offline entry into the app & Settings.
 export default function Auth() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const discovery = useAutoDiscovery(store.issuer)
-  // hanzo://oauth/mobile — the URI IAM's provisioning DERIVES for a desktop/mobile
-  // client (<scheme>://oauth/<app>), so the registration and the app cannot
-  // drift: neither side declares anything the convention does not already say.
   const redirect = makeRedirectUri({ scheme: 'hanzo', path: 'oauth/mobile' })
   const [request, response, prompt] = useAuthRequest(
     {
@@ -138,6 +156,7 @@ export default function Auth() {
           refresh: granted.refreshToken,
           exp: granted.expiresIn ? (granted.issuedAt + granted.expiresIn) * 1000 : undefined,
         })
+        await prefs.update({ guestMode: false })
         router.replace('/')
       })
       .catch((error: unknown) => {
@@ -145,12 +164,17 @@ export default function Auth() {
         setIamNote(`${said} — if the ${store.client} client is not registered yet, paste an API key below instead.`)
       })
       .finally(() => setExchanging(false))
-    // The response object is the whole story; request and discovery are
-    // stable for a given response.
   }, [response]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The pasted key is proven before it is kept: 200 from /v1/models keeps
-  // it, anything else shows the estate refusal with the server's sentence.
+  function startOidc(provider?: 'google' | 'github') {
+    setIamNote(null)
+    const targetUrl =
+      provider && request?.url
+        ? `${request.url}${request.url.includes('?') ? '&' : '?'}provider=${provider}`
+        : undefined
+    void prompt(targetUrl ? { url: targetUrl } : undefined)
+  }
+
   async function probe() {
     const value = key.trim()
     if (!value || probing) return
@@ -160,41 +184,29 @@ export default function Auth() {
       const checked = await fetch(v1('/models'), { headers: { Authorization: `Bearer ${value}` } })
       if (checked.ok) {
         await store.set({ kind: 'key', token: value })
+        await prefs.update({ guestMode: false })
         router.replace('/')
         return
       }
       const body = await checked.text().catch(() => '')
       setKeyNote(refusal(checked.status, reason(body)).message)
     } catch {
-      setKeyNote('Could not reach api.hanzo.ai. Check the connection and try again.')
+      const host = currentBase().replace(/^https?:\/\//, '')
+      setKeyNote(`Could not reach ${host}. Check the connection or configure a custom gateway in Settings.`)
     } finally {
       setProbing(false)
     }
   }
 
-  return (
-    <YStack flex={1} bg="#000000">
-      {/* Canonical flush top-left hanzo wordmark header matching hanzo.ai @ 28px */}
-      <YStack
-        width="100%"
-        pt={insets.top}
-        height={60 + insets.top}
-        px={24}
-        justify="center"
-      >
-        <Text
-          color="#ffffff"
-          fontSize={28}
-          fontWeight="700"
-          letterSpacing={-1.1}
-          lineHeight={32}
-          self="flex-start"
-          selectable={false}
-        >
-          hanzo
-        </Text>
-      </YStack>
+  async function continueWithoutSigningIn() {
+    await prefs.update({ guestMode: true })
+    router.replace('/')
+  }
 
+  const oauthDisabled = !request || !discovery || exchanging
+
+  return (
+    <YStack flex={1} bg="#000000" pt={insets.top} pb={Math.max(insets.bottom, 16)}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -204,12 +216,12 @@ export default function Auth() {
             flexGrow: 1,
             justifyContent: 'center',
             paddingHorizontal: 24,
-            paddingVertical: 16,
+            paddingVertical: 20,
           }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <YStack width="100%" maxW={400} self="center" items="center" gap="$4">
+          <YStack width="100%" maxW={380} self="center" items="center" gap="$4">
             <YStack items="center" gap="$3.5" mb="$1" width="100%">
               <HanzoAppSquircle size={64} />
               <Text
@@ -219,41 +231,71 @@ export default function Auth() {
                 letterSpacing={-0.6}
                 text="center"
               >
-                Sign in or Create Account
+                Sign in to Hanzo
               </Text>
             </YStack>
 
             <YStack gap="$2.5" width="100%">
               <Button
                 size="$4"
-                height={48}
+                height={46}
+                bg="#0d0d10"
+                borderWidth={1}
+                borderColor="rgba(255,255,255,0.12)"
+                color="#ffffff"
+                fontWeight="600"
+                fontSize={15}
+                rounded={12}
+                pressStyle={{ opacity: 0.9, bg: '#16161b' }}
+                disabled={oauthDisabled}
+                onPress={() => startOidc('google')}
+                icon={<GoogleIcon />}
+              >
+                Continue with Google
+              </Button>
+
+              <Button
+                size="$4"
+                height={46}
+                bg="#0d0d10"
+                borderWidth={1}
+                borderColor="rgba(255,255,255,0.12)"
+                color="#ffffff"
+                fontWeight="600"
+                fontSize={15}
+                rounded={12}
+                pressStyle={{ opacity: 0.9, bg: '#16161b' }}
+                disabled={oauthDisabled}
+                onPress={() => startOidc('github')}
+                icon={<GitHubIcon />}
+              >
+                Continue with GitHub
+              </Button>
+
+              <Button
+                size="$4"
+                height={46}
                 bg="#ffffff"
                 color="#09090b"
                 fontWeight="600"
                 fontSize={15}
-                rounded={9999}
+                rounded={12}
                 pressStyle={{ opacity: 0.9, bg: '#f4f4f5' }}
-                disabled={!request || !discovery || exchanging}
-                onPress={() => {
-                  setIamNote(null)
-                  void prompt()
-                }}
+                disabled={oauthDisabled}
+                onPress={() => startOidc()}
                 icon={exchanging ? <Spinner color="#09090b" /> : undefined}
               >
                 Continue with Hanzo ID
               </Button>
-              <Text color="rgba(250,250,250,0.55)" fontSize={13} text="center">
-                Google, GitHub, or Email via Hanzo ID
-              </Text>
             </YStack>
 
             {iamNote ? (
               <Card
                 width="100%"
                 p="$3.5"
-                bg="#09090b"
+                bg="#0d0d10"
                 borderWidth={1}
-                borderColor="rgba(255,255,255,0.12)"
+                borderColor="rgba(255,255,255,0.1)"
                 rounded={12}
               >
                 <Text color="#e4e4e7" fontSize={13} lineHeight={19}>
@@ -262,12 +304,12 @@ export default function Auth() {
               </Card>
             ) : null}
 
-            <XStack width="100%" items="center" gap="$3" py="$1">
-              <Separator flex={1} borderColor="rgba(255,255,255,0.1)" />
+            <XStack width="100%" items="center" gap="$3" py="$0.5">
+              <Separator flex={1} borderColor="rgba(255,255,255,0.08)" />
               <Text color="rgba(250,250,250,0.45)" fontSize={12}>
                 or
               </Text>
-              <Separator flex={1} borderColor="rgba(255,255,255,0.1)" />
+              <Separator flex={1} borderColor="rgba(255,255,255,0.08)" />
             </XStack>
 
             <YStack gap="$2.5" width="100%">
@@ -279,10 +321,10 @@ export default function Auth() {
                 }}
                 placeholder="sk-..."
                 placeholderTextColor="$color10"
-                bg="#09090b"
+                bg="#0d0d10"
                 borderWidth={1}
-                borderColor="rgba(255,255,255,0.12)"
-                height={46}
+                borderColor="rgba(255,255,255,0.1)"
+                height={44}
                 px={14}
                 rounded={12}
                 color="#ffffff"
@@ -294,33 +336,30 @@ export default function Auth() {
               />
               <Button
                 size="$4"
-                height={46}
-                bg="#141417"
+                height={44}
+                bg="#141419"
                 borderWidth={1}
-                borderColor="rgba(255,255,255,0.12)"
+                borderColor="rgba(255,255,255,0.1)"
                 color="#ffffff"
                 fontWeight="600"
-                fontSize={15}
+                fontSize={14}
                 rounded={12}
-                pressStyle={{ opacity: 0.88, bg: '#1c1c20' }}
+                pressStyle={{ opacity: 0.88, bg: '#1c1c22' }}
                 disabled={!key.trim() || probing}
                 onPress={probe}
                 icon={probing ? <Spinner color="#ffffff" /> : undefined}
               >
                 Use API key
               </Button>
-              <Text color="rgba(250,250,250,0.45)" fontSize={12} lineHeight={17} text="center">
-                Keys are checked against api.hanzo.ai and kept in the device keychain.
-              </Text>
             </YStack>
 
             {keyNote ? (
               <Card
                 width="100%"
                 p="$3.5"
-                bg="#09090b"
+                bg="#0d0d10"
                 borderWidth={1}
-                borderColor="rgba(255,255,255,0.12)"
+                borderColor="rgba(255,255,255,0.1)"
                 rounded={12}
               >
                 <Text color="#e4e4e7" fontSize={13} lineHeight={19}>
@@ -328,23 +367,20 @@ export default function Auth() {
                 </Text>
               </Card>
             ) : null}
+
+            <Button
+              chromeless
+              size="$3"
+              height={38}
+              color="rgba(250,250,250,0.55)"
+              fontSize={13}
+              onPress={continueWithoutSigningIn}
+            >
+              Continue without signing in
+            </Button>
           </YStack>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      <YStack
-        width="100%"
-        items="center"
-        justify="center"
-        gap="$2"
-        pt="$2"
-        pb={Math.max(insets.bottom, 16)}
-      >
-        <HanzoFooterMark size={20} />
-        <Text color="rgba(250,250,250,0.45)" fontSize={12}>
-          © {new Date().getFullYear()} Hanzo AI
-        </Text>
-      </YStack>
     </YStack>
   )
 }

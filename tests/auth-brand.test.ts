@@ -15,7 +15,7 @@ function readPngSize(filePath: string): { width: number; height: number; sha256:
   }
 }
 
-test('package.json and app.json versions match v2.3.4+ and enforce pure #000000 ground', () => {
+test('package.json and app.json versions match v2.3.5+ and enforce pure #000000 ground', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as { version: string }
   const appJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'app.json'), 'utf8')) as {
     expo: {
@@ -27,6 +27,7 @@ test('package.json and app.json versions match v2.3.4+ and enforce pure #000000 
     }
   }
   expect(pkg.version).toBe(appJson.expo.version)
+  expect(pkg.version).toBe('2.3.5')
   expect(appJson.expo.backgroundColor).toBe('#000000')
   expect(appJson.expo.android?.adaptiveIcon?.backgroundColor).toBe('#000000')
   expect(appJson.expo.icon).toBe('./assets/icon.png')
@@ -45,22 +46,33 @@ test('canonical Obsidian Glass Squircle icons are synced across assets/icon.png 
   expect(imagesIcon.sha256).toBe(icon.sha256)
 })
 
-test('app/auth.tsx aligns with canonical pure-black hanzo shell and first-open redirect', () => {
+test('app/auth.tsx is wordmark-free centered pure-black login with Google, GitHub, Hanzo ID, API key & guest entry', () => {
   const auth = fs.readFileSync(path.join(ROOT, 'app/auth.tsx'), 'utf8')
   expect(auth).toContain('bg="#000000"')
-  expect(auth).toContain('height={60 + insets.top}')
-  expect(auth).toContain('px={24}')
-  expect(auth).toContain('fontSize={28}')
-  expect(auth).toContain('letterSpacing={-1.1}')
-  expect(auth).toMatch(/>\s*hanzo\s*<\/Text>/)
+  expect(auth).not.toMatch(/>\s*hanzo\s*<\/Text>/)
   expect(auth).toContain('<HanzoAppSquircle size={64} />')
-  expect(auth).toContain('Sign in or Create Account')
+  expect(auth).toContain('Sign in to Hanzo')
+  expect(auth).toContain('Continue with Google')
+  expect(auth).toContain('Continue with GitHub')
   expect(auth).toContain('Continue with Hanzo ID')
-  expect(auth).toContain('Google, GitHub, or Email via Hanzo ID')
   expect(auth).toContain('Use API key')
+  expect(auth).toContain('Continue without signing in')
   expect(auth).toContain('exchangeCodeAsync(')
   expect(auth).toContain("v1('/models')")
 
   const chat = fs.readFileSync(path.join(ROOT, 'components/chat/chat.tsx'), 'utf8')
   expect(chat).toContain("router.replace('/auth')")
+})
+
+test('app/(tabs)/settings.tsx implements shared @hanzo/gui Hanzo Dev grouped settings design', () => {
+  const settings = fs.readFileSync(path.join(ROOT, 'app/(tabs)/settings.tsx'), 'utf8')
+  const primitives = fs.readFileSync(path.join(ROOT, 'components/settings/primitives.tsx'), 'utf8')
+  expect(primitives).toContain("SETTINGS_CARD_BG = '#0d0d10'")
+  expect(primitives).toContain("SETTINGS_CARD_BORDER = 'rgba(255,255,255,0.08)'")
+  expect(primitives).toContain('rounded="$4"')
+  expect(primitives).toContain('title.toUpperCase()')
+  for (const group of ['Account', 'Appearance', 'Models & API', 'Local Node', 'About']) {
+    expect(settings).toContain(`title: '${group}'`)
+  }
+  expect(settings).toContain('<SettingsSearchInput')
 })
