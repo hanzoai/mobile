@@ -22,7 +22,9 @@ export default function Layout() {
           headerShown: false,
           contentStyle: { backgroundColor: ground },
         }}
-      />
+      >
+        <Stack.Screen name="auth" options={{ animation: 'fade', gestureEnabled: false }} />
+      </Stack>
       {Platform.OS === 'android' ? <PipCard /> : null}
     </GuiProvider>
   )

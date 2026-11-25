@@ -87,6 +87,12 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
     if (!ephemeral && loaded) void history.save(messages)
   }, [ephemeral, loaded, messages])
 
+  useEffect(() => {
+    if (!ephemeral && signed === false) {
+      router.replace('/auth')
+    }
+  }, [ephemeral, signed, router])
+
   // The unmount must not leave a stream running into dead state.
   useEffect(() => () => abort.current?.abort(), [])
 
@@ -150,12 +156,8 @@ export function Chat({ ephemeral }: { ephemeral?: boolean }) {
 
   const last = messages[messages.length - 1]
 
-  if (signed === null) {
-    return (
-      <YStack flex={1} bg="$background" items="center" justify="center">
-        <Spinner color="$color10" />
-      </YStack>
-    )
+  if (signed === null || (!signed && !ephemeral)) {
+    return <YStack flex={1} bg="#000000" />
   }
 
   if (!signed) {

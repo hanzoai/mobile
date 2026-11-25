@@ -97,6 +97,7 @@ export default function Settings() {
     setCredential(null)
     setModel(null)
     setModelNote(null)
+    router.replace('/auth')
   }
 
   const payload = credential?.kind === 'iam' ? claims(credential.token) : null
