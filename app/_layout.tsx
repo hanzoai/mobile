@@ -21,7 +21,7 @@ export default function Layout() {
   }, [])
 
   return (
-    <GuiProvider config={gui} defaultTheme="dark">
+    <GuiProvider config={gui} defaultTheme="dark" telemetry={false}>
       <StatusBar style="light" />
       <Stack
         screenOptions={{

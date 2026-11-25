@@ -149,7 +149,7 @@ export default function Settings() {
   const payload = credential?.kind === 'iam' ? claims(credential.token) : null
   const email = said(payload, ['email', 'preferred_username'])
   const org = said(payload, ['org', 'org_name', 'org_id'])
-  const version = Constants.expoConfig?.version ?? '2.3.5'
+  const version = Constants.expoConfig?.version ?? '2.3.6'
 
   const accountSubtitle =
     credential === undefined

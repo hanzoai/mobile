@@ -27,7 +27,7 @@ test('package.json and app.json versions match v2.3.5+ and enforce pure #000000 
     }
   }
   expect(pkg.version).toBe(appJson.expo.version)
-  expect(pkg.version).toBe('2.3.5')
+  expect(pkg.version).toBe('2.3.6')
   expect(appJson.expo.backgroundColor).toBe('#000000')
   expect(appJson.expo.android?.adaptiveIcon?.backgroundColor).toBe('#000000')
   expect(appJson.expo.icon).toBe('./assets/icon.png')
@@ -62,6 +62,9 @@ test('app/auth.tsx is wordmark-free centered pure-black login with Google, GitHu
 
   const chat = fs.readFileSync(path.join(ROOT, 'components/chat/chat.tsx'), 'utf8')
   expect(chat).toContain("router.replace('/auth')")
+
+  const rootLayout = fs.readFileSync(path.join(ROOT, 'app/_layout.tsx'), 'utf8')
+  expect(rootLayout).toContain('telemetry={false}')
 })
 
 test('app/(tabs)/settings.tsx implements shared @hanzo/gui Hanzo Dev grouped settings design', () => {
